@@ -671,8 +671,6 @@ const TAB_PAI = {
   checklistDetalhe: 'checklists',
   manutencaoForm: 'manutencoes',
   manutencaoDetalhe: 'manutencoes',
-  lavagemForm: 'manutencoes',
-  trocaGasForm: 'manutencoes',
   equipamentoForm: 'equipamentos',
   equipamentos: 'mais',
   naoConformidades: 'mais',
@@ -683,7 +681,9 @@ const TAB_PAI = {
 };
 
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
-const SCREENS_ADMIN = ['mais', 'equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes'];
+// "mais" NÃO entra aqui: o Operador também acessa (Preventivas/Histórico),
+// só que com um conteúdo diferente — ver renderMais().
+const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes'];
 
 function render() {
   app.innerHTML = '';
@@ -722,13 +722,16 @@ function updateChrome() {
         { s: 'painel', ic: '📊', label: 'Painel' },
         { s: 'checklists', ic: '✅', label: 'Checklist' },
         { s: 'manutencoes', ic: '🔧', label: 'Abertura' },
-        { s: 'preventivas', ic: '🗓️', label: 'Preventivas' },
-        { s: 'historico', ic: '🕘', label: 'Histórico' }
+        { s: 'lavagemForm', ic: '🧽', label: 'Lavagem' },
+        { s: 'trocaGasForm', ic: '⛽', label: 'Gás' },
+        { s: 'mais', ic: '☰', label: 'Mais' }
       ];
   let ativa = TAB_PAI[S.screen] || S.screen;
-  // Tela que não tem aba própria neste perfil (ex: Preventivas e Histórico
-  // para o admin) acende a aba "Mais", que é por onde ela é acessada.
-  if (!tabs.some(function (t) { return t.s === ativa; })) ativa = ehAdmin() ? 'mais' : 'painel';
+  // Tela que não tem aba própria neste perfil (ex: Preventivas e Histórico,
+  // que ficam dentro de "Mais" para os dois perfis) acende a aba "Mais".
+  if (!tabs.some(function (t) { return t.s === ativa; })) {
+    ativa = tabs.some(function (t) { return t.s === 'mais'; }) ? 'mais' : tabs[0].s;
+  }
   tabbar.innerHTML = tabs.map(function (t) {
     return '<button class="' + (ativa === t.s ? 'is-active' : '') + '" data-s="' + t.s + '">' +
       '<span class="ic" style="position:relative">' + t.ic + '</span>' + t.label + '</button>';
@@ -1251,7 +1254,6 @@ async function renderChecklistDetalhe() {
 async function renderLavagemForm() {
   appendHtml(app, screenHeader('Lavagem', 'Lavagem de equipamento',
     'Responda os itens de verificação após a lavagem.'));
-  app.appendChild(botaoVoltar('manutencoes'));
 
   const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
   app.appendChild(card);
@@ -1369,7 +1371,7 @@ async function renderLavagemForm() {
         itens: itens
       });
       toast('Lavagem ' + res.idLavagem + ' registrada!' + (res.status === 'pendencia' ? ' Com pendência anotada.' : ''), false, true);
-      go('manutencoes');
+      go('painel');
     } catch (e) {
       btn.disabled = false; btn.textContent = '✓ Concluir lavagem';
     }
@@ -1381,7 +1383,6 @@ async function renderLavagemForm() {
 async function renderTrocaGasForm() {
   appendHtml(app, screenHeader('Troca de gás', 'Registrar troca de gás',
     'Informe o horímetro atual — o app calcula sozinho as horas de uso desde a última troca.'));
-  app.appendChild(botaoVoltar('manutencoes'));
 
   const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
   app.appendChild(card);
@@ -1465,7 +1466,7 @@ async function renderTrocaGasForm() {
         msg += ' · ' + res.horasOperacao + 'h desde a última troca desta frota.';
       }
       toast(msg, false, true);
-      go('manutencoes');
+      go('painel');
     } catch (e) {
       btn.disabled = false; btn.textContent = '✓ Registrar troca de gás';
     }
@@ -1481,17 +1482,6 @@ async function renderManutencoes() {
   const btnNova = el('<button class="btn btn--primary btn--block">＋ Nova manutenção</button>');
   btnNova.onclick = function () { go('manutencaoForm', { manutencaoAtual: null }); };
   app.appendChild(btnNova);
-
-  if (!ehAdmin()) {
-    const acoesRapidas = el('<div class="row" style="gap:8px;margin-top:8px"></div>');
-    const btnLavagem = el('<button class="btn btn--outline" style="flex:1">🧽 Lavagem</button>');
-    btnLavagem.onclick = function () { go('lavagemForm'); };
-    const btnGas = el('<button class="btn btn--outline" style="flex:1">⛽ Troca de gás</button>');
-    btnGas.onclick = function () { go('trocaGasForm'); };
-    acoesRapidas.appendChild(btnLavagem);
-    acoesRapidas.appendChild(btnGas);
-    app.appendChild(acoesRapidas);
-  }
 
   const filtros = el(
     '<div class="filters" style="margin-top:12px">' +
@@ -2810,6 +2800,19 @@ function montarRelatorioExecutivo(body, r, filtroAtual) {
 // ------------------------- MAIS (menu do admin) -------------------------
 
 function renderMais() {
+  if (!ehAdmin()) {
+    // Operador só tem consultas aqui — as ações (checklist, abertura,
+    // lavagem, troca de gás) já têm aba própria na navegação principal.
+    appendHtml(app,
+      screenHeader('Mais', 'Consultas', 'Preventivas e histórico da unidade ' + S.unidade.UNIDADE) +
+      '<div class="stack">' +
+        menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
+        menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
+      '</div>'
+    );
+    bindMenuCards();
+    return;
+  }
   appendHtml(app,
     screenHeader('Mais', 'Administração', 'Cadastros e acompanhamento da unidade ' + S.unidade.UNIDADE) +
     '<div class="stack">' +
