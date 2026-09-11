@@ -54,30 +54,52 @@ const STATUS_CHECKLIST = {
 // por POST com corpo JSON em text/plain — text/plain evita o preflight CORS
 // que quebraria a chamada vinda do GitHub Pages.
 
-async function api(action, payload) {
+// Tempo máximo esperando resposta do Apps Script antes de desistir e avisar
+// o usuário (em vez de deixar a tela girando pra sempre). O Apps Script às
+// vezes demora pra "acordar" (cold start) ou fica na fila — mas nunca deveria
+// passar disso; se passar, é melhor avisar e permitir tentar de novo do que
+// parecer que o app travou.
+const API_TIMEOUT_MS = 25000;
+
+async function api(action, payload, tentativa) {
   if (API_URL.indexOf('COLE_A_URL') > -1) {
     toast('Configure a API_URL no topo do app.js', true);
     throw new Error('API_URL não configurada');
   }
   const isRead = action.indexOf('get') === 0;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(function () { controller.abort(); }, API_TIMEOUT_MS);
   try {
     let res;
     if (isRead) {
       const qs = new URLSearchParams(Object.assign({ action: action }, flattenParams(payload))).toString();
-      res = await fetch(API_URL + '?' + qs);
+      res = await fetch(API_URL + '?' + qs, { signal: controller.signal });
     } else {
       res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
-        body: JSON.stringify({ action: action, payload: payload })
+        body: JSON.stringify({ action: action, payload: payload }),
+        signal: controller.signal
       });
     }
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Erro desconhecido');
     return json.data;
   } catch (err) {
-    toast(err.message || 'Erro de conexão com a planilha', true);
-    throw err;
+    const foiTimeout = err && err.name === 'AbortError';
+    // Ações de leitura são seguras de tentar de novo automaticamente (não
+    // gravam nada); se a primeira tentativa estourou o tempo, tenta mais
+    // uma vez sozinho antes de incomodar o usuário.
+    if (foiTimeout && isRead && !tentativa) {
+      return api(action, payload, 1);
+    }
+    const msg = foiTimeout
+      ? 'O servidor demorou muito pra responder. Tente novamente.'
+      : (err.message || 'Erro de conexão com a planilha');
+    toast(msg, true);
+    throw new Error(msg);
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
