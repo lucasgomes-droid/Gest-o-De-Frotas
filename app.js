@@ -1437,7 +1437,29 @@ async function renderTrocaGasForm() {
     })
   });
 
-  const horimetro = textField(card, { label: 'Horímetro atual', required: true, type: 'number', placeholder: 'Ex: 1240' });
+  const horimetro = textField(card, {
+    label: 'Horímetro atual', required: true, type: 'text', placeholder: 'Ex: 09529',
+    hint: 'Digite todos os números do visor, sem vírgula nem ponto — veja o exemplo abaixo.'
+  });
+  horimetro.input.setAttribute('inputmode', 'numeric');
+  horimetro.input.setAttribute('pattern', '[0-9]*');
+  // Só deixa dígito passar — mesmo que o operador tente digitar vírgula ou
+  // ponto (o horímetro mecânico mostra o último número separado, mas tem
+  // que ser digitado junto com os outros, sem separador nenhum).
+  horimetro.input.addEventListener('input', function () {
+    const limpo = horimetro.input.value.replace(/[^0-9]/g, '');
+    if (limpo !== horimetro.input.value) horimetro.input.value = limpo;
+  });
+  card.appendChild(el(
+    '<div class="horimetro-exemplo">' +
+      '<span class="horimetro-exemplo__label">📟 Como digitar o horímetro</span>' +
+      '<div class="horimetro-exemplo__visor">' +
+        '<span>0</span><span>9</span><span>5</span><span>2</span><span class="is-decimo">9</span>' +
+      '</div>' +
+      '<span class="horimetro-exemplo__seta">↓ digite todos os números juntos, sem vírgula ↓</span>' +
+      '<div class="horimetro-exemplo__campo">09529</div>' +
+    '</div>'
+  ));
 
   const fornecedorWrap = el('<div class="field"><label>Fornecedor *</label><p class="subtle" style="margin-top:0">Selecione o equipamento para ver os fornecedores da unidade.</p></div>');
   card.appendChild(fornecedorWrap);

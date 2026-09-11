@@ -285,6 +285,27 @@ input,select,textarea{font-family:inherit;font-size:16px}
 }
 .note.warn{background:#fdf6ec;border-color:#f2e0c4;border-left-color:var(--accent)}
 
+/* ---------- exemplo visual do horímetro (troca de gás) ---------- */
+.horimetro-exemplo{
+  background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius);
+  padding:12px 13px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;
+}
+.horimetro-exemplo__label{font-size:12px;font-weight:600;color:var(--ink-soft)}
+.horimetro-exemplo__visor{
+  display:flex;gap:3px;background:#1c2430;border-radius:6px;padding:6px 8px;
+}
+.horimetro-exemplo__visor span{
+  font-family:var(--mono);font-size:18px;font-weight:700;color:#f4f6f8;
+  background:#0f151d;border-radius:3px;width:20px;text-align:center;line-height:1.3;
+}
+.horimetro-exemplo__visor span.is-decimo{background:var(--accent);color:var(--accent-ink)}
+.horimetro-exemplo__seta{font-size:12px;color:var(--ink-soft)}
+.horimetro-exemplo__campo{
+  font-family:var(--mono);font-size:16px;font-weight:700;color:var(--brand-dark);
+  background:#fff;border:1.5px solid var(--brand);border-radius:var(--radius);
+  padding:6px 14px;letter-spacing:.03em;
+}
+
 /* ---------- fotos ---------- */
 .photo-input{display:flex;flex-direction:column;gap:8px}
 .photo-preview{
