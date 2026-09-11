@@ -1571,7 +1571,9 @@ const COLUNAS_MANUTENCAO = [
   ['ABERTA_EM', 'Aberta em', fmtDataHora],
   ['INICIADA_EM', 'Iniciada em', fmtDataHora],
   ['CONCLUIDA_EM', 'Concluída em', fmtDataHora],
-  ['TEMPO_MANUTENCAO_TEXTO', 'Tempo em manutenção'],
+  ['TEMPO_ESPERA_TEXTO', 'Tempo aberta aguardando início'],
+  ['TEMPO_EXECUCAO_TEXTO', 'Tempo de execução'],
+  ['TEMPO_TOTAL_TEXTO', 'Tempo total'],
   ['UNIDADE', 'Unidade']
 ];
 
@@ -1722,9 +1724,14 @@ function renderManutencaoDetalhe() {
     (m.DATA_PREVISTA ? linhaInfo('Data prevista', fmtData(m.DATA_PREVISTA)) : '') +
     linhaInfo('Aberta em', fmtDataHora(m.ABERTA_EM)) +
     (m.INICIADA_EM ? linhaInfo('Iniciada em', fmtDataHora(m.INICIADA_EM)) : '') +
-    (m.CONCLUIDA_EM ? linhaInfo('Concluída em', fmtDataHora(m.CONCLUIDA_EM)) : '') +
-    linhaInfo(m.STATUS === 'concluida' ? 'Tempo total em manutenção' : 'Tempo em manutenção até agora',
-      '<strong class="mono">' + escapeHtml(m.TEMPO_MANUTENCAO_TEXTO || '—') + '</strong>')
+    (m.CONCLUIDA_EM ? linhaInfo('Concluída em', fmtDataHora(m.CONCLUIDA_EM)) : '')
+  );
+  card.appendChild(el('<div class="divider"></div>'));
+  appendHtml(card,
+    linhaInfo('Tempo aberta aguardando início', '<strong class="mono">' + escapeHtml(m.TEMPO_ESPERA_TEXTO || '—') + '</strong>') +
+    linhaInfo('Tempo de execução', '<strong class="mono">' + escapeHtml(m.TEMPO_EXECUCAO_TEXTO || '—') + '</strong>') +
+    linhaInfo(m.STATUS === 'concluida' ? 'Tempo total (abertura → conclusão)' : 'Tempo total até agora',
+      '<strong class="mono">' + escapeHtml(m.TEMPO_TOTAL_TEXTO || '—') + '</strong>')
   );
   if (m.DESCRICAO) {
     card.appendChild(el('<div class="stack" style="gap:4px"><span class="subtle">Descrição</span>' +
