@@ -648,6 +648,9 @@ const SCREENS = {
   manutencaoForm: renderManutencaoForm,
   manutencaoDetalhe: renderManutencaoDetalhe,
 
+  lavagemForm: renderLavagemForm,
+  trocaGasForm: renderTrocaGasForm,
+
   preventivas: renderPreventivas,
   historico: renderHistorico,
 
@@ -656,6 +659,8 @@ const SCREENS = {
 
   naoConformidades: renderNaoConformidades,
   relatorios: renderRelatorios,
+  relatorioGas: renderRelatorioGas,
+  relatorioExecutivo: renderRelatorioExecutivo,
   configuracoes: renderConfiguracoes,
   mais: renderMais
 };
@@ -666,15 +671,19 @@ const TAB_PAI = {
   checklistDetalhe: 'checklists',
   manutencaoForm: 'manutencoes',
   manutencaoDetalhe: 'manutencoes',
+  lavagemForm: 'manutencoes',
+  trocaGasForm: 'manutencoes',
   equipamentoForm: 'equipamentos',
   equipamentos: 'mais',
   naoConformidades: 'mais',
+  relatorioGas: 'mais',
+  relatorioExecutivo: 'mais',
   configuracoes: 'mais',
   trocarUnidadeGlobal: 'painel'
 };
 
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
-const SCREENS_ADMIN = ['mais', 'equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'configuracoes'];
+const SCREENS_ADMIN = ['mais', 'equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes'];
 
 function render() {
   app.innerHTML = '';
@@ -1237,6 +1246,232 @@ async function renderChecklistDetalhe() {
   }
 }
 
+// ------------------------- LAVAGEM -------------------------
+
+async function renderLavagemForm() {
+  appendHtml(app, screenHeader('Lavagem', 'Lavagem de equipamento',
+    'Responda os itens de verificação após a lavagem.'));
+  app.appendChild(botaoVoltar('manutencoes'));
+
+  const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
+  app.appendChild(card);
+
+  let equipamentos, responsaveis, modelo;
+  try {
+    const res = await Promise.all([
+      carregarEquipamentos(false),
+      carregarResponsaveis(),
+      api('getLavagemItensModelo', {})
+    ]);
+    equipamentos = res[0]; responsaveis = res[1]; modelo = res[2];
+  } catch (e) {
+    card.innerHTML = '<p class="subtle">Não foi possível carregar o formulário.</p>';
+    return;
+  }
+
+  card.innerHTML = '';
+  if (!equipamentos.length) {
+    card.appendChild(el('<p class="subtle">Nenhum equipamento ativo cadastrado nesta unidade. ' +
+      'Peça ao administrador para cadastrar em Equipamentos.</p>'));
+    return;
+  }
+  if (!responsaveis.length) {
+    card.appendChild(el('<div class="note warn">Nenhum responsável cadastrado nesta unidade. ' +
+      'O administrador cadastra a lista em Configurações › Responsáveis.</div>'));
+  }
+
+  const selEquip = selectField(card, {
+    label: 'Equipamento', required: true,
+    options: equipamentos.map(function (e) {
+      return { value: e.ID_EQUIPAMENTO, label: e.NOME + (e.CODIGO ? ' (' + e.CODIGO + ')' : '') };
+    })
+  });
+
+  const selResp = selectField(card, {
+    label: 'Responsável pela lavagem', required: true,
+    options: responsaveis.map(function (r) { return { value: r.NOME, label: r.NOME }; })
+  });
+
+  const fotoEquip = photoField(card, { label: 'Foto do equipamento', required: true });
+
+  card.appendChild(el('<div class="divider"></div>'));
+  card.appendChild(el('<h3 class="title-lg">Itens da lavagem</h3>'));
+
+  const refs = modelo.map(function (m, indice) {
+    const box = el('<div class="stack" style="padding-bottom:12px;border-bottom:1px solid var(--line)"></div>');
+    card.appendChild(box);
+    box.appendChild(el('<strong style="font-size:15px">' + (indice + 1) + '. ' + escapeHtml(m.item) + '</strong>'));
+    box.appendChild(el('<p class="subtle" style="margin-top:-6px">' + escapeHtml(m.instrucao) + '</p>'));
+
+    const escolha = choiceField(box, {
+      label: 'Resultado', required: true, columns: 3,
+      options: [
+        { value: 'ok', label: 'OK', cls: 'ok' },
+        { value: 'nok', label: 'NOK', cls: 'nok' },
+        { value: 'na', label: 'N/A', cls: 'na' }
+      ]
+    });
+
+    const sub = el('<div class="stack" hidden></div>');
+    box.appendChild(sub);
+    let observacao = null;
+
+    escolha.node.addEventListener('change', function () {
+      const v = escolha.getValue();
+      sub.hidden = v !== 'nok';
+      sub.innerHTML = '';
+      observacao = null;
+      if (v === 'nok') {
+        observacao = textField(sub, { label: 'Observação (opcional)', multiline: true });
+      }
+    });
+
+    return {
+      item: m.item,
+      instrucao: m.instrucao,
+      validar: function () {
+        const v = escolha.getValue();
+        if (!v) return 'Responda o item "' + m.item + '".';
+        return null;
+      },
+      build: function () {
+        const v = escolha.getValue();
+        return {
+          item: m.item,
+          instrucao: m.instrucao,
+          resposta: v,
+          observacao: v === 'nok' && observacao ? observacao.getValue() : ''
+        };
+      }
+    };
+  });
+
+  const btn = el('<button class="btn btn--primary btn--block" style="margin-top:6px">✓ Concluir lavagem</button>');
+  card.appendChild(btn);
+  btn.onclick = async function () {
+    if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
+    if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
+    if (!fotoEquip.getValue()) { toast('A foto do equipamento é obrigatória', true); return; }
+    const itens = [];
+    for (const r of refs) {
+      const erro = r.validar();
+      if (erro) { toast(erro, true); return; }
+      itens.push(r.build());
+    }
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      const res = await api('createLavagem', {
+        unidade: S.unidade.UNIDADE,
+        idUsuario: S.usuario.ID_USUARIO,
+        idEquipamento: selEquip.getValue(),
+        responsavel: selResp.getValue(),
+        fotoEquipamento: fotoEquip.getValue(),
+        itens: itens
+      });
+      toast('Lavagem ' + res.idLavagem + ' registrada!' + (res.status === 'pendencia' ? ' Com pendência anotada.' : ''), false, true);
+      go('manutencoes');
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✓ Concluir lavagem';
+    }
+  };
+}
+
+// ------------------------- TROCA DE GÁS -------------------------
+
+async function renderTrocaGasForm() {
+  appendHtml(app, screenHeader('Troca de gás', 'Registrar troca de gás',
+    'Informe o horímetro atual — o app calcula sozinho as horas de uso desde a última troca.'));
+  app.appendChild(botaoVoltar('manutencoes'));
+
+  const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
+  app.appendChild(card);
+
+  let equipamentos, responsaveis;
+  try {
+    const res = await Promise.all([carregarEquipamentos(false), carregarResponsaveis()]);
+    equipamentos = res[0]; responsaveis = res[1];
+  } catch (e) {
+    card.innerHTML = '<p class="subtle">Não foi possível carregar o formulário.</p>';
+    return;
+  }
+
+  card.innerHTML = '';
+  if (!equipamentos.length) {
+    card.appendChild(el('<p class="subtle">Nenhum equipamento ativo cadastrado nesta unidade. ' +
+      'Peça ao administrador para cadastrar em Equipamentos.</p>'));
+    return;
+  }
+
+  const selResp = selectField(card, {
+    label: 'Responsável', required: true,
+    options: responsaveis.map(function (r) { return { value: r.NOME, label: r.NOME }; })
+  });
+
+  const selEquip = selectField(card, {
+    label: 'Frota (equipamento)', required: true,
+    options: equipamentos.map(function (e) {
+      return { value: e.ID_EQUIPAMENTO, label: e.NOME + (e.CODIGO ? ' (' + e.CODIGO + ')' : '') };
+    })
+  });
+
+  const horimetro = textField(card, { label: 'Horímetro atual', required: true, type: 'number', placeholder: 'Ex: 1240' });
+
+  const fornecedorWrap = el('<div class="field"><label>Fornecedor *</label><p class="subtle" style="margin-top:0">Selecione o equipamento para ver os fornecedores da unidade.</p></div>');
+  card.appendChild(fornecedorWrap);
+  let selFornecedor = null;
+  let fornecedores = [];
+
+  async function carregarFornecedores() {
+    fornecedorWrap.innerHTML = '<label>Fornecedor *</label><p class="subtle" style="margin-top:0">Carregando fornecedores…</p>';
+    try {
+      fornecedores = await api('getFornecedoresGas', { unidade: S.unidade.UNIDADE });
+    } catch (e) { fornecedores = []; }
+    fornecedorWrap.innerHTML = '';
+    if (!fornecedores.length) {
+      fornecedorWrap.appendChild(el('<label>Fornecedor *</label>'));
+      fornecedorWrap.appendChild(el('<div class="note warn">Nenhum fornecedor de gás cadastrado para a unidade ' +
+        escapeHtml(S.unidade.UNIDADE) + '.</div>'));
+      selFornecedor = null;
+      return;
+    }
+    selFornecedor = selectField(fornecedorWrap, {
+      label: 'Fornecedor', required: true,
+      options: fornecedores.map(function (f) {
+        return { value: f.FORNECEDOR, label: f.FORNECEDOR + ' · R$ ' + f.VALOR.toFixed(2).replace('.', ',') };
+      })
+    });
+  }
+  await carregarFornecedores();
+
+  const btn = el('<button class="btn btn--primary btn--block" style="margin-top:6px">✓ Registrar troca de gás</button>');
+  card.appendChild(btn);
+  btn.onclick = async function () {
+    if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
+    if (!selEquip.getValue()) { toast('Selecione a frota', true); return; }
+    if (!horimetro.getValue()) { toast('Informe o horímetro', true); return; }
+    if (!selFornecedor || !selFornecedor.getValue()) { toast('Selecione o fornecedor', true); return; }
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      const res = await api('createTrocaGas', {
+        unidade: S.unidade.UNIDADE,
+        idUsuario: S.usuario.ID_USUARIO,
+        idEquipamento: selEquip.getValue(),
+        responsavel: selResp.getValue(),
+        horimetro: horimetro.getValue(),
+        fornecedor: selFornecedor.getValue()
+      });
+      let msg = 'Troca de gás ' + res.idTrocaGas + ' registrada! Custo: R$ ' + Number(res.custo).toFixed(2).replace('.', ',');
+      if (res.horasOperacao !== null && res.horasOperacao !== undefined) {
+        msg += ' · ' + res.horasOperacao + 'h desde a última troca desta frota.';
+      }
+      toast(msg, false, true);
+      go('manutencoes');
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✓ Registrar troca de gás';
+    }
+  };
+}
+
 // ------------------------- MANUTENÇÕES -------------------------
 
 async function renderManutencoes() {
@@ -1246,6 +1481,17 @@ async function renderManutencoes() {
   const btnNova = el('<button class="btn btn--primary btn--block">＋ Nova manutenção</button>');
   btnNova.onclick = function () { go('manutencaoForm', { manutencaoAtual: null }); };
   app.appendChild(btnNova);
+
+  if (!ehAdmin()) {
+    const acoesRapidas = el('<div class="row" style="gap:8px;margin-top:8px"></div>');
+    const btnLavagem = el('<button class="btn btn--outline" style="flex:1">🧽 Lavagem</button>');
+    btnLavagem.onclick = function () { go('lavagemForm'); };
+    const btnGas = el('<button class="btn btn--outline" style="flex:1">⛽ Troca de gás</button>');
+    btnGas.onclick = function () { go('trocaGasForm'); };
+    acoesRapidas.appendChild(btnLavagem);
+    acoesRapidas.appendChild(btnGas);
+    app.appendChild(acoesRapidas);
+  }
 
   const filtros = el(
     '<div class="filters" style="margin-top:12px">' +
@@ -1641,7 +1887,9 @@ async function renderPreventivas() {
 const HISTORICO_ICONE = {
   checklist: { ic: '✅', label: 'Checklist' },
   manutencao: { ic: '🔧', label: 'Manutenção' },
-  nao_conformidade: { ic: '⚠️', label: 'Não conformidade' }
+  nao_conformidade: { ic: '⚠️', label: 'Não conformidade' },
+  lavagem: { ic: '🧽', label: 'Lavagem' },
+  troca_gas: { ic: '⛽', label: 'Troca de gás' }
 };
 
 async function renderHistorico() {
@@ -1658,6 +1906,8 @@ async function renderHistorico() {
         '<option value="checklist">Checklists</option>' +
         '<option value="manutencao">Manutenções</option>' +
         '<option value="nao_conformidade">Não conformidades</option>' +
+        '<option value="lavagem">Lavagens</option>' +
+        '<option value="troca_gas">Trocas de gás</option>' +
       '</select>' +
       '<select id="fEquip"><option value="">Todos os equipamentos</option></select>' +
     '</div>'
@@ -1699,9 +1949,11 @@ async function renderHistorico() {
       const info = HISTORICO_ICONE[ev.tipo] || { ic: '•', label: ev.tipo };
       let tag = '';
       if (ev.tipo === 'manutencao') tag = tagManutencao(ev.status);
-      else if (ev.tipo === 'checklist') {
+      else if (ev.tipo === 'checklist' || ev.tipo === 'lavagem') {
         const st = STATUS_CHECKLIST[ev.status] || { label: ev.status, cls: 'na' };
         tag = '<span class="tag tag--' + st.cls + '">' + escapeHtml(st.label) + '</span>';
+      } else if (ev.tipo === 'troca_gas') {
+        tag = '<span class="tag tag--uso">Concluída</span>';
       } else {
         tag = '<span class="tag tag--' + (ev.status === 'aberta' ? 'aberta' : 'concluida') + '">' +
           (ev.status === 'aberta' ? 'Aberta' : 'Fechada') + '</span>';
@@ -2273,6 +2525,288 @@ function tabelaHtml(colunas, linhas) {
   return table;
 }
 
+// ------------------------- RELATÓRIO DE GÁS (ADMIN) -------------------------
+
+function fmtMoeda(v) {
+  return 'R$ ' + (Number(v) || 0).toFixed(2).replace('.', ',');
+}
+
+async function renderRelatorioGas() {
+  appendHtml(app, screenHeader('Relatório de Gás', 'Troca de gás da frota', 'Custos, horas de uso e ranking por equipamento — unidade ' + S.unidade.UNIDADE));
+  app.appendChild(botaoVoltar('mais'));
+
+  const topo = el('<div class="stack" style="gap:8px"></div>');
+  app.appendChild(topo);
+  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes', onChange: function () { load(); } });
+
+  const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando relatório…</p></div>');
+  app.appendChild(body);
+
+  async function load() {
+    body.innerHTML = '<p class="subtle">Carregando relatório…</p>';
+    const p = periodo.getValue();
+    const r = await api('getRelatorioGas', {
+      unidade: S.unidade.UNIDADE,
+      periodo: p.periodo,
+      dataInicio: p.dataInicio,
+      dataFim: p.dataFim
+    }).catch(function () { return null; });
+    body.innerHTML = '';
+    if (!r) return;
+    montarRelatorioGas(body, r);
+  }
+  load();
+}
+
+function montarRelatorioGas(body, r) {
+  const ind = r.indicadores;
+
+  body.appendChild(el(
+    '<div class="report-hero">' +
+      '<div class="row between" style="align-items:flex-start">' +
+        '<div class="stack" style="gap:2px">' +
+          '<span class="eyebrow">Relatório de gás</span>' +
+          '<h2>' + escapeHtml(r.unidade) + '</h2>' +
+          '<span class="hero-sub">' + escapeHtml(r.periodo.label) + '</span>' +
+        '</div>' +
+        '<img class="hero-logo" src="logo.png" alt="ICC Brazil">' +
+      '</div>' +
+      '<span class="hero-sub" style="opacity:.75">Gerado em ' + fmtDataHora(r.geradoEm) + '</span>' +
+    '</div>'
+  ));
+
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(ind.totalTrocas, 'Trocas no período') +
+      kpi(fmtMoeda(ind.custoTotal), 'Custo total', 'kpi--accent') +
+      kpi(ind.horaMedia ? ind.horaMedia + 'h' : '—', 'Horas médias entre trocas') +
+      kpi(ind.custoMedioPorHora ? fmtMoeda(ind.custoMedioPorHora) + '/h' : '—', 'Custo médio por hora') +
+    '</div>'
+  ));
+
+  // ---- Custo por fornecedor ----
+  const entradasFornecedor = Object.entries(r.custoPorFornecedor || {}).sort(function (a, b) { return b[1] - a[1]; });
+  const cardForn = el('<div class="card stack"><h3 class="title-lg">⛽ Custo por fornecedor</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Total gasto e número de trocas no período</p></div>');
+  body.appendChild(cardForn);
+  if (!entradasFornecedor.length) {
+    cardForn.appendChild(el('<p class="subtle">Nenhuma troca de gás no período.</p>'));
+  } else {
+    const max = entradasFornecedor[0][1] || 1;
+    entradasFornecedor.forEach(function (e) {
+      const qtd = (r.trocasPorFornecedor || {})[e[0]] || 0;
+      cardForn.appendChild(el(
+        '<div class="bar-row"><span class="label">' + escapeHtml(e[0]) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, (e[1] / max) * 100) + '%"></div></div>' +
+        '<span class="bar-val">' + escapeHtml(fmtMoeda(e[1])) + ' · ' + qtd + 'x</span></div>'
+      ));
+    });
+  }
+
+  // ---- Rankings por frota ----
+  function cardRanking(titulo, subtitulo, icone, lista, montarLinha) {
+    const card = el('<div class="card stack"><h3 class="title-lg">' + icone + ' ' + escapeHtml(titulo) + '</h3>' +
+      '<p class="subtle" style="margin-top:-6px">' + escapeHtml(subtitulo) + '</p></div>');
+    body.appendChild(card);
+    if (!lista.length) {
+      card.appendChild(el('<p class="subtle">Sem dados suficientes no período.</p>'));
+      return;
+    }
+    lista.forEach(function (item, i) {
+      card.appendChild(el(
+        '<div class="rank-row">' +
+          '<span class="rank-pos">' + (i + 1) + '</span>' +
+          '<span class="rank-info"><span class="n">' + escapeHtml(item.nomeEquipamento) + '</span>' +
+          '<div class="subtle" style="font-size:12px">' + montarLinha(item) + '</div></span>' +
+          '<span class="rank-time">' + escapeHtml(item.__valorExibido) + '</span>' +
+        '</div>'
+      ));
+    });
+  }
+
+  cardRanking('Maior custo por frota', 'Total gasto com gás no período', '💰',
+    (r.rankingCustoPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: fmtMoeda(i.custo) }); }),
+    function (item) { return item.quantidade + ' troca(s)'; });
+
+  cardRanking('Mais horas de uso por frota', 'Horas acumuladas entre trocas no período', '⏱️',
+    (r.rankingHorasPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: i.horasTotal + 'h' }); }),
+    function (item) { return item.quantidade + ' troca(s)'; });
+
+  cardRanking('Maior custo por hora', 'Frotas com o gás mais caro em relação ao uso', '📈',
+    (r.rankingCustoPorHoraPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: fmtMoeda(i.custoPorHora) + '/h' }); }),
+    function () { return 'Custo ÷ horas de uso'; });
+
+  cardRanking('Maior intervalo médio entre trocas', 'Frotas que mais seguram o gás', '🕐',
+    (r.rankingIntervaloMedioPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: i.horasMedia + 'h' }); }),
+    function (item) { return item.quantidade + ' troca(s)'; });
+
+  // ---- Tabela detalhada ----
+  const cardTabela = el('<div class="card stack"><h3 class="title-lg">Trocas do período</h3></div>');
+  body.appendChild(cardTabela);
+  if (!r.trocas.length) {
+    cardTabela.appendChild(el('<p class="subtle">Nenhuma troca de gás no período selecionado.</p>'));
+  } else {
+    const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
+    btnCsv.onclick = function () { downloadCSV(nomeArquivo('trocas_gas', 'csv'), COLUNAS_TROCA_GAS, r.trocas); };
+    cardTabela.appendChild(btnCsv);
+    const scroll = el('<div class="table-scroll"></div>');
+    scroll.appendChild(tabelaHtml(COLUNAS_TROCA_GAS, r.trocas.slice(0, 30)));
+    cardTabela.appendChild(scroll);
+    if (r.trocas.length > 30) {
+      cardTabela.appendChild(el('<p class="subtle">Mostrando os 30 primeiros de ' + r.trocas.length + ' registro(s). O CSV traz tudo.</p>'));
+    }
+  }
+}
+
+const COLUNAS_TROCA_GAS = [
+  ['ID_TROCA_GAS', 'ID'],
+  ['NOME_EQUIPAMENTO', 'Frota'],
+  ['RESPONSAVEL', 'Responsável'],
+  ['FORNECEDOR', 'Fornecedor'],
+  ['HORIMETRO', 'Horímetro'],
+  ['HORIMETRO_ANTERIOR', 'Horímetro anterior'],
+  ['HORAS_OPERACAO', 'Horas de uso'],
+  ['CUSTO', 'Custo', fmtMoeda],
+  ['DATA_HORA', 'Data/hora', fmtDataHora],
+  ['UNIDADE', 'Unidade']
+];
+
+// ------------------------- RELATÓRIO EXECUTIVO (ADMIN) -------------------------
+// Resumo único juntando Manutenção + Lavagem + Troca de Gás, pra levar pra
+// gestão — só indicadores e gráficos (os rankings e tabelas detalhadas
+// continuam nos relatórios individuais de cada assunto).
+
+async function renderRelatorioExecutivo() {
+  appendHtml(app, screenHeader('Relatório Executivo', 'Manutenção, Lavagem e Gás', 'Resumo consolidado para apresentação à gestão — unidade ' + S.unidade.UNIDADE));
+  app.appendChild(botaoVoltar('mais'));
+
+  const topo = el('<div class="stack" style="gap:8px"></div>');
+  app.appendChild(topo);
+  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes', onChange: function () { load(); } });
+
+  const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando relatório…</p></div>');
+  app.appendChild(body);
+
+  async function load() {
+    body.innerHTML = '<p class="subtle">Carregando relatório…</p>';
+    const p = periodo.getValue();
+    const r = await api('getRelatorioExecutivo', {
+      unidade: S.unidade.UNIDADE,
+      periodo: p.periodo,
+      dataInicio: p.dataInicio,
+      dataFim: p.dataFim
+    }).catch(function () { return null; });
+    body.innerHTML = '';
+    if (!r) return;
+    montarRelatorioExecutivo(body, r, p);
+  }
+  load();
+}
+
+function montarRelatorioExecutivo(body, r, filtroAtual) {
+  const mInd = r.manutencao.indicadores;
+  const lav = r.lavagem;
+  const gasInd = r.gas.indicadores;
+
+  body.appendChild(el(
+    '<div class="report-hero">' +
+      '<div class="row between" style="align-items:flex-start">' +
+        '<div class="stack" style="gap:2px">' +
+          '<span class="eyebrow">Relatório executivo</span>' +
+          '<h2>' + escapeHtml(r.unidade) + '</h2>' +
+          '<span class="hero-sub">' + escapeHtml(r.periodo.label) + '</span>' +
+        '</div>' +
+        '<img class="hero-logo" src="logo.png" alt="ICC Brazil">' +
+      '</div>' +
+      '<span class="hero-sub" style="opacity:.75">Gerado em ' + fmtDataHora(r.geradoEm) + '</span>' +
+    '</div>'
+  ));
+
+  const btnPdf = el('<button class="btn btn--accent btn--block">📄 Baixar relatório executivo em PDF</button>');
+  btnPdf.onclick = async function () {
+    btnPdf.disabled = true;
+    btnPdf.innerHTML = '<span class="spinner" style="border-color:rgba(58,37,6,.3);border-top-color:#3a2506"></span> Gerando PDF…';
+    toast('Gerando o PDF no servidor — isso pode levar alguns segundos…');
+    try {
+      const res = await api('gerarRelatorioExecutivoPDF', {
+        unidade: S.unidade.UNIDADE,
+        periodo: filtroAtual.periodo,
+        dataInicio: filtroAtual.dataInicio,
+        dataFim: filtroAtual.dataFim
+      });
+      downloadBase64File(res.filename, res.base64, 'application/pdf');
+      toast('Relatório executivo em PDF baixado!', false, true);
+    } catch (e) { /* toast já mostrado pelo api() */ }
+    btnPdf.disabled = false;
+    btnPdf.textContent = '📄 Baixar relatório executivo em PDF';
+  };
+  body.appendChild(btnPdf);
+
+  // ---- Manutenção ----
+  body.appendChild(el('<h3 class="title-lg" style="margin-top:4px">🔧 Manutenção</h3>'));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(mInd.totalEquipamentos, 'Equipamentos') +
+      kpi(mInd.checklistsRealizados, 'Checklists realizados') +
+      kpi(mInd.manutencoesTotal, 'Manutenções no período', 'kpi--accent') +
+      kpi(mInd.manutencoesConcluidas, 'Concluídas', 'kpi--uso') +
+    '</div>'
+  ));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(mInd.manutencoesAbertas, 'Abertas', 'kpi--parado') +
+      kpi(mInd.manutencoesAndamento, 'Em andamento', 'kpi--manut') +
+      kpi(mInd.naoConformidadesAbertas, 'NCs abertas', 'kpi--parado') +
+      kpi(mInd.equipamentosParadosAgora, 'Parados agora', 'kpi--parado') +
+    '</div>'
+  ));
+  body.appendChild(painelGrafico('Manutenções por status', 'Quantidade de manutenções em cada etapa no período',
+    r.manutencao.graficoManutencoesPorStatus));
+  body.appendChild(painelGrafico('Situação atual da frota', 'Situação atual de cada equipamento cadastrado',
+    r.manutencao.graficoStatusFrota));
+
+  // ---- Lavagem ----
+  body.appendChild(el('<h3 class="title-lg">🧽 Lavagem</h3>'));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(lav.total, 'Lavagens no período') +
+      kpi(lav.semPendencia, 'Sem pendência', 'kpi--uso') +
+      kpi(lav.comPendencia, 'Com pendência', lav.comPendencia > 0 ? 'kpi--parado' : '') +
+    '</div>'
+  ));
+  body.appendChild(painelGrafico('Lavagens por resultado', 'Sem pendência x com pendência no período', lav.grafico));
+
+  // ---- Troca de gás ----
+  body.appendChild(el('<h3 class="title-lg">⛽ Troca de gás</h3>'));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(gasInd.totalTrocas, 'Trocas no período') +
+      kpi(fmtMoeda(gasInd.custoTotal), 'Custo total', 'kpi--accent') +
+      kpi(gasInd.horaMedia ? gasInd.horaMedia + 'h' : '—', 'Horas médias entre trocas') +
+      kpi(gasInd.custoMedioPorHora ? fmtMoeda(gasInd.custoMedioPorHora) + '/h' : '—', 'Custo médio por hora') +
+    '</div>'
+  ));
+
+  const entradasFornecedor = Object.entries(r.gas.custoPorFornecedor || {}).sort(function (a, b) { return b[1] - a[1]; });
+  const cardForn = el('<div class="card stack"><h3 class="title-lg" style="font-size:15px">Custo por fornecedor</h3></div>');
+  body.appendChild(cardForn);
+  if (!entradasFornecedor.length) {
+    cardForn.appendChild(el('<p class="subtle">Nenhuma troca de gás no período.</p>'));
+  } else {
+    const max = entradasFornecedor[0][1] || 1;
+    entradasFornecedor.forEach(function (e) {
+      const qtd = (r.gas.trocasPorFornecedor || {})[e[0]] || 0;
+      cardForn.appendChild(el(
+        '<div class="bar-row"><span class="label">' + escapeHtml(e[0]) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, (e[1] / max) * 100) + '%"></div></div>' +
+        '<span class="bar-val">' + escapeHtml(fmtMoeda(e[1])) + ' · ' + qtd + 'x</span></div>'
+      ));
+    });
+  }
+
+  body.appendChild(el('<p class="subtle" style="text-align:center;margin-top:4px">Para rankings e tabelas detalhadas de cada assunto, use os relatórios individuais (Relatórios e Relatório de Gás).</p>'));
+}
+
 // ------------------------- MAIS (menu do admin) -------------------------
 
 function renderMais() {
@@ -2283,6 +2817,8 @@ function renderMais() {
       menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
       menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
+      menuCard('⛽', 'Relatório de Gás', 'Custos, horas de uso e ranking das trocas', 'relatorioGas') +
+      menuCard('📊', 'Relatório Executivo', 'Manutenção + Lavagem + Gás num resumo só, com PDF', 'relatorioExecutivo') +
       menuCard('⚙️', 'Configurações', 'Responsáveis do checklist, usuários e unidades', 'configuracoes') +
     '</div>'
   );
