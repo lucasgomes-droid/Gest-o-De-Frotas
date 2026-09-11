@@ -93,6 +93,7 @@ function flattenParams(obj) {
 
 const S = {
   unidade: null,        // {ID_UNIDADE, UNIDADE}
+  cargo: null,          // 'ADMIN' | 'OPERADOR' — escolhido no login, antes do usuário
   usuario: null,        // {ID_USUARIO, NOME, USUARIO, TIPO, UNIDADE}
   screen: 'loginUnidade',
   pendingUser: null,
@@ -107,6 +108,7 @@ const S = {
 
 function resetSession() {
   S.unidade = null;
+  S.cargo = null;
   S.usuario = null;
   S.screen = 'loginUnidade';
   S.pendingUser = null;
@@ -631,6 +633,7 @@ document.getElementById('btnTrocarUnidadeGlobal').onclick = function () { go('tr
 
 const SCREENS = {
   loginUnidade: renderLoginUnidade,
+  loginCargo: renderLoginCargo,
   loginUsuario: renderLoginUsuario,
   loginSenha: renderLoginSenha,
   trocarUnidadeGlobal: renderTrocarUnidadeGlobal,
@@ -745,26 +748,54 @@ async function renderLoginUnidade() {
     unidades.forEach(function (u) {
       const item = el('<button type="button" class="list-item" style="width:100%">' +
         '<span class="list-item__title">' + escapeHtml(u.UNIDADE) + '</span><span>›</span></button>');
-      item.onclick = function () { S.unidade = u; go('loginUsuario'); };
+      item.onclick = function () { S.unidade = u; go('loginCargo'); };
       wrap.appendChild(item);
     });
   } catch (e) { /* toast já mostrado */ }
+}
+
+function renderLoginCargo() {
+  appendHtml(app,
+    screenHeader('Login · ' + S.unidade.UNIDADE, 'Qual o seu cargo?', 'Selecione como você vai acessar') +
+    '<div class="stack" style="gap:12px">' +
+      '<button class="btn btn--outline btn--sm" id="btnVoltarUnidadeCargo" style="align-self:flex-start;margin-top:-6px">← Trocar unidade</button>' +
+      '<div class="card stack">' +
+        '<button type="button" class="list-item" id="btnCargoOperador" style="width:100%">' +
+          '<span><span class="list-item__title">🧑‍🔧 Operador</span>' +
+          '<div class="list-item__sub">Checklist, manutenções, preventivas</div></span>' +
+          '<span>›</span>' +
+        '</button>' +
+        '<button type="button" class="list-item" id="btnCargoAdmin" style="width:100%">' +
+          '<span><span class="list-item__title">🛡️ Administrador</span>' +
+          '<div class="list-item__sub">Acesso completo · pede senha</div></span>' +
+          '<span>›</span>' +
+        '</button>' +
+      '</div>' +
+    '</div>'
+  );
+  document.getElementById('btnVoltarUnidadeCargo').onclick = function () { go('loginUnidade'); };
+  document.getElementById('btnCargoOperador').onclick = function () { S.cargo = 'OPERADOR'; go('loginUsuario'); };
+  document.getElementById('btnCargoAdmin').onclick = function () { S.cargo = 'ADMIN'; go('loginUsuario'); };
 }
 
 async function renderLoginUsuario() {
   appendHtml(app,
     screenHeader('Login · ' + S.unidade.UNIDADE, 'Quem é você?', 'Selecione seu usuário') +
     '<div class="stack" style="gap:12px">' +
-      '<button class="btn btn--outline btn--sm" id="btnVoltarUnidade" style="align-self:flex-start;margin-top:-6px">← Trocar unidade</button>' +
+      '<button class="btn btn--outline btn--sm" id="btnVoltarUnidade" style="align-self:flex-start;margin-top:-6px">← Voltar</button>' +
       '<div class="card stack" id="usuariosList"><p class="subtle">Carregando usuários…</p></div>' +
     '</div>'
   );
-  document.getElementById('btnVoltarUnidade').onclick = function () { go('loginUnidade'); };
+  document.getElementById('btnVoltarUnidade').onclick = function () { go('loginCargo'); };
   try {
-    const usuarios = await api('getUsuarios', { unidade: S.unidade.UNIDADE });
+    const todos = await api('getUsuarios', { unidade: S.unidade.UNIDADE });
+    const usuarios = todos.filter(function (u) { return u.TIPO === S.cargo; });
     const wrap = document.getElementById('usuariosList');
     wrap.innerHTML = '';
-    if (!usuarios.length) { wrap.innerHTML = '<p class="subtle">Nenhum usuário ativo nesta unidade.</p>'; return; }
+    if (!usuarios.length) {
+      wrap.innerHTML = '<p class="subtle">Nenhum usuário ' + (S.cargo === 'ADMIN' ? 'administrador' : 'operador') + ' ativo nesta unidade.</p>';
+      return;
+    }
     usuarios.forEach(function (u) {
       const item = el(
         '<button type="button" class="list-item" style="width:100%">' +
