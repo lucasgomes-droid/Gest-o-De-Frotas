@@ -649,7 +649,6 @@ function filtroPeriodo(container, opts) {
 // mapa de telas já foi definido)
 
 document.getElementById('btnLogout').onclick = function () { resetSession(); render(); };
-document.getElementById('btnTrocarUnidadeGlobal').onclick = function () { go('trocarUnidadeGlobal'); };
 
 // ------------------------- ROTEADOR -------------------------
 
@@ -658,9 +657,9 @@ const SCREENS = {
   loginCargo: renderLoginCargo,
   loginUsuario: renderLoginUsuario,
   loginSenha: renderLoginSenha,
-  trocarUnidadeGlobal: renderTrocarUnidadeGlobal,
 
   painel: renderPainel,
+  visaoGeral: renderVisaoGeralUnidades,
 
   checklists: renderChecklists,
   checklistNovo: renderChecklistNovo,
@@ -698,20 +697,26 @@ const TAB_PAI = {
   naoConformidades: 'mais',
   relatorioGas: 'mais',
   relatorioExecutivo: 'mais',
-  configuracoes: 'mais',
-  trocarUnidadeGlobal: 'painel'
+  configuracoes: 'mais'
 };
 
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
 // "mais" NÃO entra aqui: o Operador também acessa (Preventivas/Histórico),
 // só que com um conteúdo diferente — ver renderMais().
-const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes'];
+const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'visaoGeral'];
 
 function render() {
   app.innerHTML = '';
   if (SCREENS_ADMIN.indexOf(S.screen) > -1 && !ehAdmin()) {
     S.screen = 'painel';
     toast('Área restrita ao administrador.', true);
+  }
+  // Enquanto a unidade ativa for o sentinel "Todas as unidades", só a tela
+  // de comparativo é permitida — pra registrar qualquer coisa (checklist,
+  // manutenção, lavagem, gás) o gerente troca pra uma unidade específica
+  // na própria barra de abas, que fica sempre visível.
+  if (S.usuario && ehSentinelTodas_(S.unidade) && S.screen !== 'visaoGeral') {
+    S.screen = 'visaoGeral';
   }
   const fn = SCREENS[S.screen] || renderLoginUnidade;
   fn();
@@ -729,7 +734,31 @@ function updateChrome() {
   topbar.hidden = false;
   document.getElementById('topbarUnidade').textContent = S.unidade.UNIDADE;
   document.getElementById('topbarUsuario').textContent = S.usuario.NOME + ' · ' + (ehAdmin() ? 'Admin' : 'Operador');
-  document.getElementById('btnTrocarUnidadeGlobal').hidden = String(S.usuario.UNIDADE).toUpperCase() !== 'TODAS';
+
+  // Barra de abas de unidade — só existe pra quem tem UNIDADE = TODAS
+  // (gerente/coordenador). Fica sempre visível, em qualquer tela, desde
+  // logo depois do login.
+  const unitsBar = document.getElementById('topbarUnits');
+  if (souGerente_()) {
+    unitsBar.hidden = false;
+    if (S.cache.todasUnidadesLista) {
+      renderBarraUnidadesGerente(S.cache.todasUnidadesLista);
+    } else {
+      api('getUnidades', {}).then(function (lista) {
+        S.cache.todasUnidadesLista = lista;
+        renderBarraUnidadesGerente(lista);
+      }).catch(function () { /* toast já mostrado */ });
+    }
+  } else {
+    unitsBar.hidden = true;
+  }
+
+  // Em "Todas as unidades" só existe a tela de comparativo — sem tabbar
+  // de operação (Checklist/Manutenções/etc.), que não se aplica ali.
+  if (ehSentinelTodas_(S.unidade)) {
+    tabbar.hidden = true;
+    return;
+  }
 
   tabbar.hidden = false;
   const tabs = ehAdmin()
@@ -879,32 +908,135 @@ function renderLoginSenha() {
   };
 }
 
-// Usuário com UNIDADE = TODAS troca a unidade de trabalho sem sair do app.
-async function renderTrocarUnidadeGlobal() {
-  if (String(S.usuario.UNIDADE).toUpperCase() !== 'TODAS') {
-    toast('Você não tem permissão para trocar de unidade.', true);
-    go('painel');
-    return;
-  }
-  app.appendChild(el(screenHeader('Trocar unidade', 'Unidade atual: ' + S.unidade.UNIDADE, 'Você tem acesso a todas as unidades')));
-  const card = el('<div class="card stack"><p class="subtle">Carregando unidades…</p></div>');
-  app.appendChild(card);
+// Unidade "virtual" usada só pelo usuário com UNIDADE = TODAS (gerente/
+// coordenador) — nunca existe na planilha CONFIG_UNIDADES; é só o sentinel
+// que, ao ser escolhido, joga o app pra tela de comparativo consolidado.
+const UNIDADE_TODAS_OBJ = { ID_UNIDADE: 'TODAS', UNIDADE: 'Todas as Unidades' };
+
+function ehSentinelTodas_(u) { return String((u || {}).ID_UNIDADE).toUpperCase() === 'TODAS'; }
+function souGerente_() { return !!S.usuario && ehAdmin() && String(S.usuario.UNIDADE).toUpperCase() === 'TODAS'; }
+
+// Barra de abas do gerente (uma por unidade real + "Todas as unidades"),
+// sempre visível embaixo da barra superior desde o login — é a troca de
+// unidade em si, sem precisar entrar em nenhuma tela extra pra isso.
+function renderBarraUnidadesGerente(unidades) {
+  const wrap = document.getElementById('topbarUnits');
+  const itens = unidades.concat([UNIDADE_TODAS_OBJ]);
+  const atualId = String((S.unidade || {}).ID_UNIDADE || (S.unidade || {}).UNIDADE || '').toUpperCase();
+  wrap.innerHTML = itens.map(function (u) {
+    const todas = ehSentinelTodas_(u);
+    const id = String(u.ID_UNIDADE || u.UNIDADE).toUpperCase();
+    const ativo = id === atualId;
+    return '<button type="button" class="' + (ativo ? 'is-active ' : '') + (todas ? 'is-todas' : '') + '">' +
+      (todas ? '🌐 ' : '') + escapeHtml(u.UNIDADE) + '</button>';
+  }).join('');
+  wrap.querySelectorAll('button').forEach(function (btn, i) {
+    btn.onclick = function () {
+      const u = itens[i];
+      const id = String(u.ID_UNIDADE || u.UNIDADE).toUpperCase();
+      if (id === atualId) return; // já está nela
+      S.unidade = u;
+      S.cache = {};
+      go(ehSentinelTodas_(u) ? 'visaoGeral' : 'painel');
+    };
+  });
+}
+
+// ------------------------- TODAS AS UNIDADES (GERENTE) -------------------------
+// Visão consolidada pra quem tem acesso a todas as unidades: comparativo
+// visual (máquinas ativas/manutenção/paradas, unidade por unidade) e o
+// relatório único de todas as unidades juntas. Sem escrita nenhuma aqui —
+// pra registrar qualquer coisa, o gerente troca pra uma unidade específica
+// na própria barra de abas.
+async function renderVisaoGeralUnidades() {
+  appendHtml(app, screenHeader('Gerente · Todas as unidades', 'Visão geral',
+    'Comparativo em tempo real de Macatuba, Jundiaí I e Jundiaí II'));
+
+  const topo = el('<div class="card stack" style="gap:10px"></div>');
+  app.appendChild(topo);
+  topo.appendChild(el('<h3 class="title-lg" style="font-size:15px">📄 Relatório de todas as unidades</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Manutenção + Lavagem + Troca de gás das três unidades, num PDF só</p>'));
+  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes' });
+  const btnPdf = el('<button class="btn btn--accent btn--block">📄 Emitir relatório de todas as unidades</button>');
+  topo.appendChild(btnPdf);
+  btnPdf.onclick = async function () {
+    btnPdf.disabled = true;
+    btnPdf.innerHTML = '<span class="spinner" style="border-color:rgba(58,37,6,.3);border-top-color:#3a2506"></span> Gerando PDF das 3 unidades…';
+    toast('Gerando o PDF no servidor — com todas as unidades pode levar mais tempo…');
+    try {
+      const p = periodo.getValue();
+      // Reaproveita a mesma ação do Relatório Executivo — ela já suporta
+      // unidade = 'TODAS' (o backend filtra "sem filtro" nesse caso),
+      // então o PDF sai combinando Manutenção + Lavagem + Gás das 3
+      // unidades juntas, sem precisar de uma ação nova no Code.gs.
+      const res = await api('gerarRelatorioExecutivoPDF', { unidade: 'TODAS', periodo: p.periodo, dataInicio: p.dataInicio, dataFim: p.dataFim });
+      downloadBase64File(res.filename, res.base64, 'application/pdf');
+      toast('Relatório de todas as unidades baixado!', false, true);
+    } catch (e) { /* toast já mostrado pelo api() */ }
+    btnPdf.disabled = false;
+    btnPdf.innerHTML = '📄 Emitir relatório de todas as unidades';
+  };
+
+  const body = el('<div class="stack" style="margin-top:2px"><p class="subtle">Carregando comparativo das unidades…</p></div>');
+  app.appendChild(body);
   try {
-    const unidades = await api('getUnidades', {});
-    card.innerHTML = '';
-    unidades.forEach(function (u) {
-      const atual = u.UNIDADE === S.unidade.UNIDADE;
-      const item = el('<button type="button" class="list-item" style="width:100%">' +
-        '<span class="list-item__title">' + escapeHtml(u.UNIDADE) + (atual ? ' (atual)' : '') + '</span><span>›</span></button>');
-      item.onclick = function () {
-        S.unidade = u;
-        S.cache = {};
-        toast('Unidade alterada para ' + u.UNIDADE, false, true);
-        go('painel');
-      };
-      card.appendChild(item);
+    const d = await api('getVisaoGeralUnidades', {});
+    montarVisaoGeralUnidades(body, d);
+  } catch (e) {
+    body.innerHTML = '<p class="subtle">Não foi possível carregar o comparativo das unidades.</p>';
+  }
+}
+
+function montarVisaoGeralUnidades(body, d) {
+  body.innerHTML = '';
+  const t = d.totais;
+  body.appendChild(el('<h3 class="title-lg">📊 Frota — total das ' + d.totalUnidades + ' unidades</h3>'));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(t.total, 'Equipamentos') +
+      kpi(t.em_uso, 'Ativas', 'kpi--uso') +
+      kpi(t.manutencao, 'Em manutenção', 'kpi--manut') +
+      kpi(t.parado, 'Paradas', 'kpi--parado') +
+    '</div>'
+  ));
+
+  body.appendChild(el('<h3 class="title-lg" style="margin-top:6px">🏭 Unidade por unidade</h3>'));
+  const lista = el('<div class="unit-compare-list"></div>');
+  body.appendChild(lista);
+
+  if (!d.unidades.length) {
+    lista.appendChild(el('<p class="subtle">Nenhuma unidade ativa cadastrada.</p>'));
+  } else {
+    d.unidades.forEach(function (u) {
+      const base = Math.max(1, u.total);
+      const pct = function (v) { return Math.max(0, (v / base) * 100); };
+      lista.appendChild(el(
+        '<div class="unit-compare-card">' +
+          '<div class="unit-compare-card__head">' +
+            '<span class="unit-compare-card__title">' + escapeHtml(u.UNIDADE) + '</span>' +
+            '<span class="unit-compare-card__total">' + u.total + ' equipamento(s)</span>' +
+          '</div>' +
+          '<div class="unit-compare-track">' +
+            (u.em_uso ? '<div class="unit-compare-seg" style="width:' + pct(u.em_uso) + '%;background:var(--st-uso)"></div>' : '') +
+            (u.manutencao ? '<div class="unit-compare-seg" style="width:' + pct(u.manutencao) + '%;background:var(--st-manut)"></div>' : '') +
+            (u.parado ? '<div class="unit-compare-seg" style="width:' + pct(u.parado) + '%;background:var(--st-parado)"></div>' : '') +
+            (u.inativo ? '<div class="unit-compare-seg" style="width:' + pct(u.inativo) + '%;background:var(--st-inativo)"></div>' : '') +
+          '</div>' +
+          '<div class="unit-compare-legend">' +
+            '<span><span class="dot" style="background:var(--st-uso)"></span>' + u.em_uso + ' ativa(s)</span>' +
+            '<span><span class="dot" style="background:var(--st-manut)"></span>' + u.manutencao + ' manutenção</span>' +
+            '<span><span class="dot" style="background:var(--st-parado)"></span>' + u.parado + ' parada(s)</span>' +
+            (u.inativo ? '<span><span class="dot" style="background:var(--st-inativo)"></span>' + u.inativo + ' inativa(s)</span>' : '') +
+          '</div>' +
+        '</div>'
+      ));
     });
-  } catch (e) { /* */ }
+  }
+
+  body.appendChild(el('<p class="subtle" style="text-align:center">Checklist de hoje — ' +
+    d.unidades.map(function (u) { return escapeHtml(u.UNIDADE) + ': ' + u.checklistsHoje.feitos + '/' + u.checklistsHoje.total; }).join(' · ') +
+    '</p>'));
+  body.appendChild(el('<p class="subtle" style="text-align:center">Atualizado em ' + fmtDataHora(d.geradoEm) + '</p>'));
 }
 
 // ------------------------- PAINEL -------------------------
