@@ -1115,7 +1115,7 @@ async function renderPainel() {
     '<p class="subtle" style="margin-top:-6px">' + resumo.feitos + ' feito(s) · ' + resumo.pendentes + ' pendente(s)</p></div>');
   body.appendChild(cardChk);
   if (!d.checklistDoDia.length) {
-    cardChk.appendChild(el('<p class="subtle">Nenhum equipamento ativo cadastrado nesta unidade.</p>'));
+    cardChk.appendChild(el('<p class="subtle">Nenhum equipamento em uso nesta unidade hoje (parados e em manutenção não entram no checklist).</p>'));
   } else {
     d.checklistDoDia.forEach(function (c) {
       const item = el(
