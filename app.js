@@ -1593,6 +1593,12 @@ async function renderTrocaGasForm() {
     '</div>'
   ));
 
+  const kg = textField(card, {
+    label: 'Quantidade de gás (kg) — opcional', required: false, type: 'text', placeholder: 'Ex: 20',
+    hint: 'Deixe em branco se não souber. Ex: cilindro P20 = 20kg, P45 = 45kg.'
+  });
+  kg.input.setAttribute('inputmode', 'decimal');
+
   const fornecedorWrap = el('<div class="field"><label>Fornecedor *</label><p class="subtle" style="margin-top:0">Selecione o equipamento para ver os fornecedores da unidade.</p></div>');
   card.appendChild(fornecedorWrap);
   let selFornecedor = null;
@@ -1635,7 +1641,8 @@ async function renderTrocaGasForm() {
         idEquipamento: selEquip.getValue(),
         responsavel: selResp.getValue(),
         horimetro: horimetro.getValue(),
-        fornecedor: selFornecedor.getValue()
+        fornecedor: selFornecedor.getValue(),
+        quantidadeKg: kg.getValue()
       });
       let msg = 'Troca de gás ' + res.idTrocaGas + ' registrada! Custo: R$ ' + Number(res.custo).toFixed(2).replace('.', ',');
       if (res.horasOperacao !== null && res.horasOperacao !== undefined) {
@@ -2520,18 +2527,39 @@ function montarRelatorio(body, r, filtroAtual) {
   ));
   body.appendChild(el(
     '<div class="kpi-grid">' +
-      kpi(ind.manutencoesAbertas, 'Manutenções abertas', 'kpi--parado') +
+      kpi(ind.manutencoesAtivas, 'Manutenções ativas', 'kpi--manut') +
+      kpi(ind.manutencoesAbertas, 'Abertas', 'kpi--parado') +
       kpi(ind.manutencoesAndamento, 'Em andamento', 'kpi--manut') +
-      kpi(ind.naoConformidadesAbertas, 'NCs abertas', 'kpi--parado') +
-      kpi(ind.naoConformidadesFechadas, 'NCs fechadas', 'kpi--uso') +
+      kpi(ind.manutencoesConcluidas, 'Concluídas', 'kpi--uso') +
     '</div>'
   ));
   body.appendChild(el(
     '<div class="kpi-grid">' +
+      kpi(ind.naoConformidadesAbertas, 'NCs abertas', 'kpi--parado') +
+      kpi(ind.naoConformidadesFechadas, 'NCs fechadas', 'kpi--uso') +
       kpi(ind.equipamentosParadosAgora, 'Parados agora', 'kpi--parado') +
       kpi(ind.equipamentosEmManutencaoAgora, 'Em manutenção agora', 'kpi--manut') +
+    '</div>'
+  ));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
       kpi(ind.manutencoesPreventivas, 'Preventivas') +
       kpi(ind.manutencoesCorretivas, 'Corretivas') +
+    '</div>'
+  ));
+
+  // ---- Impacto: horas sem máquina x horas em operação, no período ----
+  const imp = r.impacto || {};
+  const cardImpacto = el('<div class="card stack"><h3 class="title-lg">⏱️ Impacto no período</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Horas acumuladas de toda a frota, calculadas a partir do histórico de status ' +
+    '— só cobre mudanças de status registradas a partir de 17/09/2026 em diante.</p></div>');
+  body.appendChild(cardImpacto);
+  cardImpacto.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(imp.indisponibilidadeTexto || '0min', 'Sem máquina (manut. + parado)', 'kpi--parado') +
+      kpi(imp.manutencaoTexto || '0min', 'Só manutenção', 'kpi--manut') +
+      kpi(imp.paradoTexto || '0min', 'Só parado', 'kpi--parado') +
+      kpi(imp.operacaoTexto || '0min', 'Em operação', 'kpi--uso') +
     '</div>'
   ));
 
@@ -2556,6 +2584,26 @@ function montarRelatorio(body, r, filtroAtual) {
           '<div class="subtle" style="font-size:12px">' + escapeHtml(item.codigo || item.tipo || '—') + ' · ' +
             item.quantidadeManutencoes + ' manutenção(ões)</div></span>' +
           '<span class="rank-time">' + escapeHtml(item.tempoTexto) + '</span>' +
+        '</div>'
+      ));
+    });
+  }
+
+  // ---- Ranking de QUANTIDADE de manutenções (quem deu mais trabalho de novo) ----
+  const cardRankQtd = el('<div class="card stack"><h3 class="title-lg">🔁 Máquinas com mais manutenções</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Contagem de manutenções abertas no período — pode ser diferente do ranking por tempo</p></div>');
+  body.appendChild(cardRankQtd);
+  if (!r.rankingQuantidadeManutencao.length) {
+    cardRankQtd.appendChild(el('<p class="subtle">Nenhuma manutenção no período.</p>'));
+  } else {
+    r.rankingQuantidadeManutencao.slice(0, 10).forEach(function (item, i) {
+      cardRankQtd.appendChild(el(
+        '<div class="rank-row">' +
+          '<span class="rank-pos">' + (i + 1) + '</span>' +
+          '<span class="rank-info"><span class="n">' + escapeHtml(item.nomeEquipamento) + '</span>' +
+          '<div class="subtle" style="font-size:12px">' + escapeHtml(item.codigo || item.tipo || '—') + ' · tempo total ' +
+            escapeHtml(item.tempoTexto) + '</div></span>' +
+          '<span class="rank-time">' + item.quantidadeManutencoes + 'x</span>' +
         '</div>'
       ));
     });
@@ -2597,6 +2645,42 @@ function montarRelatorio(body, r, filtroAtual) {
   // ---- Não conformidades mais recorrentes ----
   body.appendChild(barCard('⚠️ Não conformidades por item', r.naoConformidadesPorItem,
     'Itens do checklist que mais reprovaram no período'));
+
+  // ---- Gás no período (resumo) — detalhe completo continua no Relatório de Gás ----
+  const gasInd = (r.gas && r.gas.indicadores) || {};
+  const cardGas = el('<div class="card stack"><h3 class="title-lg">⛽ Gás no período</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Resumo — para fornecedor, tabela de trocas e mais rankings, use o Relatório de Gás</p></div>');
+  body.appendChild(cardGas);
+  cardGas.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(gasInd.totalTrocas || 0, 'Trocas no período') +
+      kpi(fmtMoeda(gasInd.custoTotal), 'Custo total', 'kpi--accent') +
+      kpi((gasInd.kgTotal || 0) + 'kg', 'Consumo total (kg)') +
+      kpi(gasInd.custoMedioPorKg ? fmtMoeda(gasInd.custoMedioPorKg) : '—', 'Custo médio por kg') +
+    '</div>'
+  ));
+
+  // ---- Comparativo: custo de gás × horas de operação real, por máquina ----
+  const cardComparativo = el('<div class="card stack"><h3 class="title-lg">⚖️ Custo de gás × horas em operação</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Custo por hora que a máquina realmente trabalhou no período (não por hora entre trocas)</p></div>');
+  body.appendChild(cardComparativo);
+  const comCusto = (r.comparativoCustoHorasOperacao || []).filter(function (c) { return c.custoGasTotal > 0; });
+  if (!comCusto.length) {
+    cardComparativo.appendChild(el('<p class="subtle">Nenhuma troca de gás com custo no período.</p>'));
+  } else {
+    comCusto.slice(0, 10).forEach(function (item, i) {
+      cardComparativo.appendChild(el(
+        '<div class="rank-row">' +
+          '<span class="rank-pos">' + (i + 1) + '</span>' +
+          '<span class="rank-info"><span class="n">' + escapeHtml(item.nomeEquipamento) + '</span>' +
+          '<div class="subtle" style="font-size:12px">' + fmtMoeda(item.custoGasTotal) +
+            (item.kgTotal !== null && item.kgTotal !== undefined ? ' · ' + item.kgTotal + 'kg' : '') +
+            ' · ' + item.horasOperacao + 'h em operação</div></span>' +
+          '<span class="rank-time">' + (item.custoPorHoraOperacao !== null ? fmtMoeda(item.custoPorHoraOperacao) + '/h' : '—') + '</span>' +
+        '</div>'
+      ));
+    });
+  }
 
   // ---- Tabelas detalhadas com export CSV ----
   const cardTabelas = el('<div class="card stack"><h3 class="title-lg">Tabelas detalhadas</h3></div>');
@@ -3121,4 +3205,3 @@ async function renderConfiguracoes() {
 // declarado com const e só existe a partir daqui.
 
 render();
-
