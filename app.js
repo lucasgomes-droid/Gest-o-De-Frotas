@@ -61,14 +61,27 @@ const STATUS_CHECKLIST = {
 // parecer que o app travou.
 const API_TIMEOUT_MS = 25000;
 
+// [PERF 17/09] Gerar PDF (Slides + gráficos + Drive) é sempre mais lento
+// que uma leitura normal — ainda mais agora que o relatório geral e o
+// executivo ganharam seções novas (mais cálculo, mais páginas). Usar o
+// mesmo limite de 25s pra isso fazia o app desistir enquanto o Apps
+// Script ainda estava terminando de montar o PDF (não travado, só
+// demorado) — daí a mensagem de timeout e precisar tentar de novo. Essas
+// ações específicas ganham um tempo de espera bem maior.
+const ACOES_LENTAS_TIMEOUT_MS = {
+  gerarRelatorioPDF: 170000,
+  gerarRelatorioExecutivoPDF: 170000
+};
+
 async function api(action, payload, tentativa) {
   if (API_URL.indexOf('COLE_A_URL') > -1) {
     toast('Configure a API_URL no topo do app.js', true);
     throw new Error('API_URL não configurada');
   }
   const isRead = action.indexOf('get') === 0;
+  const timeoutMs = ACOES_LENTAS_TIMEOUT_MS[action] || API_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeoutId = setTimeout(function () { controller.abort(); }, API_TIMEOUT_MS);
+  const timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
   try {
     let res;
     if (isRead) {
@@ -2499,7 +2512,7 @@ function montarRelatorio(body, r, filtroAtual) {
   btnPdf.onclick = async function () {
     btnPdf.disabled = true;
     btnPdf.innerHTML = '<span class="spinner" style="border-color:rgba(58,37,6,.3);border-top-color:#3a2506"></span> Gerando PDF…';
-    toast('Gerando o PDF no servidor — isso pode levar alguns segundos…');
+    toast('Gerando o PDF no servidor — pode levar até 2-3 minutos com esses relatórios novos, não feche a tela…');
     try {
       const res = await api('gerarRelatorioPDF', {
         unidade: S.unidade.UNIDADE,
@@ -2983,7 +2996,7 @@ function montarRelatorioExecutivo(body, r, filtroAtual) {
   btnPdf.onclick = async function () {
     btnPdf.disabled = true;
     btnPdf.innerHTML = '<span class="spinner" style="border-color:rgba(58,37,6,.3);border-top-color:#3a2506"></span> Gerando PDF…';
-    toast('Gerando o PDF no servidor — isso pode levar alguns segundos…');
+    toast('Gerando o PDF no servidor — pode levar até 2-3 minutos com esses relatórios novos, não feche a tela…');
     try {
       const res = await api('gerarRelatorioExecutivoPDF', {
         unidade: S.unidade.UNIDADE,
