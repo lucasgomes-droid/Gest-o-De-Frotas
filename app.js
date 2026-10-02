@@ -73,38 +73,68 @@ const ACOES_LENTAS_TIMEOUT_MS = {
   gerarRelatorioExecutivoPDF: 170000
 };
 
+// [OUT/2026] Cada registro novo (ações "create...") leva um idRequisicao.
+// Se o envio for repetido — automático depois de um timeout, ou manual —
+// o servidor reconhece o mesmo id e devolve o resultado da primeira vez,
+// em vez de gravar em duplicidade.
+const REQ_IDS = {};
+function hashTexto(texto) {
+  let h = 5381;
+  for (let i = 0; i < texto.length; i++) h = ((h << 5) + h + texto.charCodeAt(i)) | 0;
+  return String(h) + '_' + texto.length;
+}
+function novoIdRequisicao() {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
 async function api(action, payload, tentativa) {
   if (API_URL.indexOf('COLE_A_URL') > -1) {
     toast('Configure a API_URL no topo do app.js', true);
     throw new Error('API_URL não configurada');
   }
   const isRead = action.indexOf('get') === 0;
+  const ehCriacao = action.indexOf('create') === 0;
+  let chaveReq = null;
+  let envio = payload;
+  if (ehCriacao) {
+    chaveReq = action + '|' + hashTexto(JSON.stringify(payload || {}));
+    if (!REQ_IDS[chaveReq]) REQ_IDS[chaveReq] = novoIdRequisicao();
+    envio = Object.assign({}, payload, { idRequisicao: REQ_IDS[chaveReq] });
+  }
   const timeoutMs = ACOES_LENTAS_TIMEOUT_MS[action] || API_TIMEOUT_MS;
   const controller = new AbortController();
   const timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
   try {
     let res;
     if (isRead) {
-      const qs = new URLSearchParams(Object.assign({ action: action }, flattenParams(payload))).toString();
-      res = await fetch(API_URL + '?' + qs, { signal: controller.signal });
+      const q = Object.assign({ action: action }, flattenParams(envio));
+      if (S.token) q.token = S.token;
+      res = await fetch(API_URL + '?' + new URLSearchParams(q).toString(), { signal: controller.signal });
     } else {
       res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
-        body: JSON.stringify({ action: action, payload: payload }),
+        body: JSON.stringify({ action: action, payload: envio, token: S.token || '' }),
         signal: controller.signal
       });
     }
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'Erro desconhecido');
+    if (chaveReq) delete REQ_IDS[chaveReq];
     return json.data;
   } catch (err) {
     const foiTimeout = err && err.name === 'AbortError';
-    // Ações de leitura são seguras de tentar de novo automaticamente (não
-    // gravam nada); se a primeira tentativa estourou o tempo, tenta mais
-    // uma vez sozinho antes de incomodar o usuário.
-    if (foiTimeout && isRead && !tentativa) {
+    // Leituras não gravam nada, e criações agora são protegidas contra
+    // duplicidade pelo idRequisicao — as duas podem ser repetidas uma vez
+    // sozinhas antes de incomodar o usuário.
+    if (foiTimeout && (isRead || ehCriacao) && !tentativa) {
       return api(action, payload, 1);
+    }
+    if (err && err.message && err.message.indexOf('Sessão expirada') === 0 && S.usuario) {
+      resetSession();
+      render();
+      toast('Sua sessão expirou. Entre novamente.', true);
+      throw err;
     }
     const msg = foiTimeout
       ? 'O servidor demorou muito pra responder. Tente novamente.'
@@ -130,6 +160,7 @@ const S = {
   unidade: null,        // {ID_UNIDADE, UNIDADE}
   cargo: null,          // 'ADMIN' | 'OPERADOR' — escolhido no login, antes do usuário
   usuario: null,        // {ID_USUARIO, NOME, USUARIO, TIPO, UNIDADE}
+  token: null,          // token de sessão devolvido pelo servidor no login
   screen: 'loginUnidade',
   pendingUser: null,
   cache: {},            // listas que não mudam a toda hora (tipos, itens modelo)
@@ -145,6 +176,9 @@ function resetSession() {
   S.unidade = null;
   S.cargo = null;
   S.usuario = null;
+  S.token = null;
+  S.manutencaoPrefill = null;
+  try { sessionStorage.removeItem(CHAVE_SESSAO); } catch (e) { /* sem armazenamento: segue */ }
   S.screen = 'loginUnidade';
   S.pendingUser = null;
   S.cache = {};
@@ -156,6 +190,28 @@ function resetSession() {
   S.filtros = {};
   document.getElementById('topbar').hidden = true;
   document.getElementById('tabbar').hidden = true;
+}
+
+// [OUT/2026] A sessão fica guardada enquanto a aba estiver aberta: atualizar
+// a página (F5) não desloga mais. Fechou a aba, precisa entrar de novo.
+const CHAVE_SESSAO = 'centralDeFrota_sessao';
+function salvarSessao() {
+  try {
+    sessionStorage.setItem(CHAVE_SESSAO, JSON.stringify({
+      unidade: S.unidade, cargo: S.cargo, usuario: S.usuario, token: S.token
+    }));
+  } catch (e) { /* sem armazenamento: o app funciona igual, só não lembra no F5 */ }
+}
+function restaurarSessao() {
+  try {
+    const bruto = sessionStorage.getItem(CHAVE_SESSAO);
+    if (!bruto) return;
+    const s = JSON.parse(bruto);
+    if (s && s.token && s.usuario && s.unidade) {
+      S.unidade = s.unidade; S.cargo = s.cargo; S.usuario = s.usuario; S.token = s.token;
+      S.screen = 'painel';
+    }
+  } catch (e) { /* dado inválido: começa do login */ }
 }
 
 function ehAdmin() { return S.usuario && S.usuario.TIPO === 'ADMIN'; }
@@ -745,6 +801,7 @@ function updateChrome() {
     return;
   }
   topbar.hidden = false;
+  salvarSessao();
   document.getElementById('topbarUnidade').textContent = S.unidade.UNIDADE;
   document.getElementById('topbarUsuario').textContent = S.usuario.NOME + ' · ' + (ehAdmin() ? 'Admin' : 'Operador');
 
@@ -885,9 +942,13 @@ async function renderLoginUsuario() {
         if (u.TIPO === 'ADMIN') {
           go('loginSenha', { pendingUser: u });
         } else {
-          // Operador entra direto: a identificação é a escolha do nome.
-          S.usuario = u;
-          go('painel');
+          // Operador entra sem senha, mas o servidor abre uma sessão pra ele.
+          item.disabled = true;
+          api('loginOperador', { idUsuario: u.ID_USUARIO }).then(function (data) {
+            S.token = data.token;
+            S.usuario = data;
+            go('painel');
+          }).catch(function () { item.disabled = false; });
         }
       };
       wrap.appendChild(item);
@@ -913,6 +974,7 @@ function renderLoginSenha() {
     btn.disabled = true; btn.textContent = 'Verificando…';
     try {
       const data = await api('loginAdmin', { idUsuario: u.ID_USUARIO, senha: input.value });
+      S.token = data.token;
       S.usuario = data;
       go('painel');
     } catch (e) {
@@ -963,18 +1025,18 @@ function renderBarraUnidadesGerente(unidades) {
 // na própria barra de abas.
 async function renderVisaoGeralUnidades() {
   appendHtml(app, screenHeader('Gerente · Todas as unidades', 'Visão geral',
-    'Comparativo em tempo real de Macatuba, Jundiaí I e Jundiaí II'));
+    'Comparativo em tempo real de todas as unidades ativas'));
 
   const topo = el('<div class="card stack" style="gap:10px"></div>');
   app.appendChild(topo);
   topo.appendChild(el('<h3 class="title-lg" style="font-size:15px">📄 Relatório de todas as unidades</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Manutenção + Lavagem + Troca de gás das três unidades, num PDF só</p>'));
+    '<p class="subtle" style="margin-top:-6px">Manutenção + Lavagem + Troca de gás de todas as unidades, num PDF só</p>'));
   const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes' });
   const btnPdf = el('<button class="btn btn--accent btn--block">📄 Emitir relatório de todas as unidades</button>');
   topo.appendChild(btnPdf);
   btnPdf.onclick = async function () {
     btnPdf.disabled = true;
-    btnPdf.innerHTML = '<span class="spinner" style="border-color:rgba(58,37,6,.3);border-top-color:#3a2506"></span> Gerando PDF das 3 unidades…';
+    btnPdf.innerHTML = '<span class="spinner" style="border-color:rgba(58,37,6,.3);border-top-color:#3a2506"></span> Gerando PDF de todas as unidades…';
     toast('Gerando o PDF no servidor — com todas as unidades pode levar mais tempo…');
     try {
       const p = periodo.getValue();
@@ -1171,6 +1233,11 @@ async function renderChecklists() {
     '</div>'
   );
   app.appendChild(filtros);
+  // [OUT/2026] Por padrão só os últimos 30 dias — a lista não fica mais
+  // lenta conforme o histórico cresce.
+  const periodoWrap = el('<div style="margin-top:8px"></div>');
+  app.appendChild(periodoWrap);
+  const periodo = filtroPeriodo(periodoWrap, { comTodos: true, value: 'mes', onChange: function () { load(); } });
 
   const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando…</p></div>');
   app.appendChild(body);
@@ -1186,8 +1253,10 @@ async function renderChecklists() {
 
   async function load() {
     body.innerHTML = '<p class="subtle">Carregando…</p>';
+    const per = periodo.getValue();
     const lista = await api('getChecklists', {
       unidade: S.unidade.UNIDADE,
+      periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim,
       status: selStatus.value || undefined,
       idEquipamento: selEquip.value || undefined
     }).catch(function () { return []; });
@@ -1230,7 +1299,8 @@ async function renderChecklistNovo() {
       carregarResponsaveis(),
       api('getChecklistItensModelo', {})
     ]);
-    equipamentos = res[0]; responsaveis = res[1]; modelo = res[2];
+    // Checklist só de equipamento em uso (mesma regra do Painel).
+    equipamentos = res[0].filter(function (e) { return e.STATUS === 'em_uso'; }); responsaveis = res[1]; modelo = res[2];
   } catch (e) {
     card.innerHTML = '<p class="subtle">Não foi possível carregar o formulário.</p>';
     return;
@@ -1238,8 +1308,8 @@ async function renderChecklistNovo() {
 
   card.innerHTML = '';
   if (!equipamentos.length) {
-    card.appendChild(el('<p class="subtle">Nenhum equipamento ativo cadastrado nesta unidade. ' +
-      'Peça ao administrador para cadastrar em Equipamentos.</p>'));
+    card.appendChild(el('<p class="subtle">Nenhum equipamento "Em uso" nesta unidade. ' +
+      'Parados e em manutenção não fazem checklist.</p>'));
     return;
   }
   if (!responsaveis.length) {
@@ -1599,7 +1669,7 @@ async function renderTrocaGasForm() {
     '<div class="horimetro-exemplo">' +
       '<span class="horimetro-exemplo__label">📟 Como digitar o horímetro</span>' +
       '<div class="horimetro-exemplo__visor">' +
-        '<span>0</span><span>9</span><span>5</span><span>2</span><span class="is-decimo">9</span>' +
+        '<span>0</span><span>9</span><span>5</span><span>2</span><span>9</span>' +
       '</div>' +
       '<span class="horimetro-exemplo__seta">↓ digite todos os números juntos, sem vírgula ↓</span>' +
       '<div class="horimetro-exemplo__campo">09529</div>' +
@@ -1776,6 +1846,9 @@ const COLUNAS_MANUTENCAO = [
 async function renderManutencaoForm() {
   const m = S.manutencaoAtual;
   const editando = !!m;
+  // Dados vindos do botão "Abrir manutenção" de uma não conformidade.
+  const pre = (!editando && S.manutencaoPrefill) || {};
+  S.manutencaoPrefill = null;
   appendHtml(app, screenHeader(editando ? 'Editar manutenção' : 'Nova manutenção',
     editando ? m.ID_MANUTENCAO : 'Abrir manutenção',
     editando ? m.NOME_EQUIPAMENTO : 'Registre uma manutenção corretiva ou preventiva'));
@@ -1794,14 +1867,14 @@ async function renderManutencaoForm() {
 
   const selEquip = selectField(card, {
     label: 'Equipamento', required: true,
-    value: editando ? m.ID_EQUIPAMENTO : '',
+    value: editando ? m.ID_EQUIPAMENTO : (pre.idEquipamento || ''),
     options: equipamentos.map(function (e) {
       return { value: e.ID_EQUIPAMENTO, label: e.NOME + (e.CODIGO ? ' (' + e.CODIGO + ')' : '') };
     })
   });
   if (editando) selEquip.select.disabled = true; // o backend não troca o equipamento de uma manutenção
 
-  const tit = textField(card, { label: 'Título', required: true, value: editando ? m.TITULO : '', placeholder: 'Ex: Troca de pastilha de freio' });
+  const tit = textField(card, { label: 'Título', required: true, value: editando ? m.TITULO : (pre.titulo || ''), placeholder: 'Ex: Troca de pastilha de freio' });
 
   const selTipo = selectField(card, {
     label: 'Tipo', required: true, semVazio: true,
@@ -1826,7 +1899,7 @@ async function renderManutencaoForm() {
   selTipo.select.onchange = atualizarPrevista;
   atualizarPrevista();
 
-  const desc = textField(card, { label: 'Descrição', multiline: true, value: editando ? m.DESCRICAO : '' });
+  const desc = textField(card, { label: 'Descrição', multiline: true, value: editando ? m.DESCRICAO : (pre.descricao || '') });
 
   const selStatus = selectField(card, {
     label: 'Status', required: true, semVazio: true,
@@ -2433,6 +2506,20 @@ async function renderNaoConformidades() {
         }
       };
       card.appendChild(btn);
+      if (aberta) {
+        const btnMan = el('<button class="btn btn--outline btn--block">🔧 Abrir manutenção para este problema</button>');
+        btnMan.onclick = function () {
+          go('manutencaoForm', {
+            manutencaoAtual: null,
+            manutencaoPrefill: {
+              idEquipamento: nc.ID_EQUIPAMENTO,
+              titulo: nc.ITEM,
+              descricao: (nc.DESCRICAO ? nc.DESCRICAO + ' ' : '') + '(origem: não conformidade ' + nc.ID_NC + ')'
+            }
+          });
+        };
+        card.appendChild(btnMan);
+      }
       return card;
     }, 10);
   }
@@ -2501,7 +2588,7 @@ function montarRelatorio(body, r, filtroAtual) {
           '<h2>' + escapeHtml(r.unidade) + '</h2>' +
           '<span class="hero-sub">' + escapeHtml(r.periodo.label) + '</span>' +
         '</div>' +
-        '<img class="hero-logo" src="logo.png" alt="ICC Brazil">' +
+        '<img class="hero-logo" src="icon-192.png" alt="ICC Brazil">' +
       '</div>' +
       '<span class="hero-sub" style="opacity:.75">Gerado em ' + fmtDataHora(r.geradoEm) + '</span>' +
     '</div>'
@@ -2535,7 +2622,7 @@ function montarRelatorio(body, r, filtroAtual) {
       kpi(ind.totalEquipamentos, 'Equipamentos') +
       kpi(ind.checklistsRealizados, 'Checklists realizados') +
       kpi(ind.manutencoesTotal, 'Manutenções no período', 'kpi--accent') +
-      kpi(ind.manutencoesConcluidas, 'Manutenções concluídas', 'kpi--uso') +
+      kpi(ind.checklistsComPendencia, 'Checklists com pendência', 'kpi--parado') +
     '</div>'
   ));
   body.appendChild(el(
@@ -2839,7 +2926,7 @@ function montarRelatorioGas(body, r) {
           '<h2>' + escapeHtml(r.unidade) + '</h2>' +
           '<span class="hero-sub">' + escapeHtml(r.periodo.label) + '</span>' +
         '</div>' +
-        '<img class="hero-logo" src="logo.png" alt="ICC Brazil">' +
+        '<img class="hero-logo" src="icon-192.png" alt="ICC Brazil">' +
       '</div>' +
       '<span class="hero-sub" style="opacity:.75">Gerado em ' + fmtDataHora(r.geradoEm) + '</span>' +
     '</div>'
@@ -2986,7 +3073,7 @@ function montarRelatorioExecutivo(body, r, filtroAtual) {
           '<h2>' + escapeHtml(r.unidade) + '</h2>' +
           '<span class="hero-sub">' + escapeHtml(r.periodo.label) + '</span>' +
         '</div>' +
-        '<img class="hero-logo" src="logo.png" alt="ICC Brazil">' +
+        '<img class="hero-logo" src="icon-192.png" alt="ICC Brazil">' +
       '</div>' +
       '<span class="hero-sub" style="opacity:.75">Gerado em ' + fmtDataHora(r.geradoEm) + '</span>' +
     '</div>'
@@ -3217,4 +3304,5 @@ async function renderConfiguracoes() {
 // Fica no fim do arquivo de propósito: o roteador (SCREENS/TAB_PAI) é
 // declarado com const e só existe a partir daqui.
 
+restaurarSessao();
 render();
