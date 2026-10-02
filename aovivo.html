@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#101826">
+<title>Central de Frota · Painel ao vivo</title>
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0f172a;--ink-soft:#5b6472;--paper:#eef1f5;--card:#fff;--line:#e3e7ec;
+  --brand:#5e9030;--brand-dark:#436722;--chrome:#101826;--chrome-ink:#cdd6e3;--chrome-soft:#7d8aa0;
+  --uso:#16a34a;--manut:#d97706;--parado:#dc2626;--info:#2563eb;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:'IBM Plex Sans',system-ui,sans-serif;background:var(--paper);color:var(--ink);font-size:15px;line-height:1.4}
+header{background:var(--chrome);color:#fff;padding:12px 16px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
+header img{width:34px;height:34px;border-radius:8px;background:#fff}
+header .t{flex:1;min-width:0}
+header strong{display:block;font-size:15px}
+header span{font-size:12px;color:var(--chrome-soft);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--uso);margin-right:6px;animation:p 1.8s infinite}
+.live.off{background:var(--parado);animation:none}
+@keyframes p{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.live{animation:none}}
+button,.btn{font:inherit;font-weight:600;border:0;border-radius:8px;padding:10px 16px;cursor:pointer;background:var(--brand);color:#fff;text-decoration:none;display:inline-block}
+button.ghost,.btn.ghost{background:transparent;color:var(--chrome-ink);border:1px solid rgba(255,255,255,.18);padding:7px 12px;font-size:13px}
+button:focus-visible,.btn:focus-visible,.chip:focus-visible{outline:3px solid var(--info);outline-offset:2px}
+main{max-width:1180px;margin:0 auto;padding:16px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:12px}
+.chip{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 14px;font-size:13px;font-weight:600;white-space:nowrap}
+.chip[aria-pressed="true"]{background:var(--chrome);color:#fff;border-color:var(--chrome)}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:720px){.kpis{grid-template-columns:repeat(6,1fr)}}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 12px;border-top:4px solid var(--line)}
+.kpi b{font-family:'IBM Plex Mono',monospace;font-size:28px;display:block;line-height:1.1}
+.kpi span{font-size:12px;color:var(--ink-soft)}
+.kpi.uso{border-top-color:var(--uso)}.kpi.manut{border-top-color:var(--manut)}.kpi.parado{border-top-color:var(--parado)}.kpi.info{border-top-color:var(--info)}
+.cols{display:grid;gap:14px;margin-top:14px}
+@media(min-width:900px){.cols{grid-template-columns:1fr 1fr}}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+h2{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);display:flex;justify-content:space-between}
+ul{list-style:none;margin:0;padding:0}
+li{padding:10px 0;border-top:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+li:first-child{border-top:0}
+li .m{flex:1;min-width:0}
+li .m strong{display:block;overflow-wrap:anywhere}
+li .m small{color:var(--ink-soft);display:block;overflow-wrap:anywhere}
+.tag{font-size:11px;font-weight:700;border-radius:6px;padding:3px 8px;white-space:nowrap;color:#fff;background:var(--ink-soft)}
+.tag.alta,.tag.parado,.tag.aberta{background:var(--parado)}
+.tag.media,.tag.manutencao,.tag.andamento{background:var(--manut)}
+.tag.baixa,.tag.em_uso{background:var(--uso)}
+.vazio{color:var(--ink-soft);font-size:14px;padding:6px 0}
+.centro{max-width:420px;margin:12vh auto;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 22px}
+.centro img{width:64px;height:64px;border-radius:14px}
+.centro h1{font-size:20px;margin:14px 0 6px}
+.centro p{color:var(--ink-soft);margin:0 0 18px}
+.erro{color:var(--parado);font-size:13px;margin-top:12px}
+</style>
+</head>
+<body>
+<div id="raiz"><div class="centro"><p>Carregando…</p></div></div>
+
+<script type="module">
+import { firebaseConfig } from './firebase-config.js';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getFirestore, collection, doc, getDoc, onSnapshot, query, where }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+const raiz = document.getElementById('raiz');
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const norm = (v) => String(v ?? '').trim().toLowerCase();
+const data = (v) => { const d = new Date(v); return isNaN(d) ? null : d; };
+const fmt = (v) => { const d = data(v); return d ? d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'; };
+const ha = (v) => {
+  const d = data(v); if (!d) return '';
+  const h = (Date.now() - d) / 36e5;
+  return h < 1 ? 'há ' + Math.max(1, Math.round(h * 60)) + ' min' : h < 48 ? 'há ' + Math.round(h) + ' h' : 'há ' + Math.round(h / 24) + ' dias';
+};
+
+function telaCentro(titulo, texto, extraHtml) {
+  raiz.innerHTML = '<div class="centro"><img src="logo.png" alt="ICC Brazil"><h1>' + esc(titulo) + '</h1><p>' + esc(texto) + '</p>' + (extraHtml || '') + '</div>';
+}
+
+if (!firebaseConfig.apiKey || firebaseConfig.apiKey === 'COLE_AQUI') {
+  telaCentro('Painel ainda não configurado', 'Preencha o arquivo firebase-config.js com os dados do projeto do Firebase.');
+} else {
+  iniciar();
+}
+
+function iniciar() {
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  let cancelar = [];
+  const E = { equipamentos: [], manutencoes: [], ncs: [], checklists: [], acesso: null, unidade: 'TODAS', online: true, atualizado: null, user: null };
+
+  function telaLogin(msgErro) {
+    telaCentro('Painel ao vivo', 'Entre com a conta Google cadastrada na Central de Frota.',
+      '<button id="entrar">Entrar com Google</button> <a class="btn" style="background:#fff;color:var(--brand-dark);border:1px solid var(--line)" href="./">Abrir o app</a>' +
+      (msgErro ? '<div class="erro" role="alert">' + esc(msgErro) + '</div>' : ''));
+    document.getElementById('entrar').onclick = () =>
+      signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => telaLogin('Não foi possível entrar: ' + (e.code || e.message)));
+  }
+
+  onAuthStateChanged(auth, async (user) => {
+    cancelar.forEach((f) => f()); cancelar = [];
+    if (!user) return telaLogin();
+    E.user = user;
+    try {
+      const snap = await getDoc(doc(db, 'acessos', user.email));
+      if (!snap.exists()) throw new Error('sem acesso');
+      E.acesso = snap.data();
+    } catch (e) {
+      telaCentro('Sem acesso', user.email + ' não está liberado para o painel. Peça para incluir este e-mail na aba CONFIG_EMAILS_MANUTENCAO da planilha.',
+        '<button id="sair">Trocar de conta</button>');
+      document.getElementById('sair').onclick = () => signOut(auth);
+      return;
+    }
+    const ouvir = (q, chave) => cancelar.push(onSnapshot(q, { includeMetadataChanges: true }, (s) => {
+      E[chave] = s.docs.map((d) => d.data());
+      E.online = !s.metadata.fromCache;
+      if (!s.metadata.fromCache) E.atualizado = new Date();
+      desenhar();
+    }, (err) => { E.online = false; console.error(chave, err); desenhar(); }));
+
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const inicioHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0') + '-' + String(hoje.getDate()).padStart(2, '0');
+    ouvir(collection(db, 'equipamentos'), 'equipamentos');
+    ouvir(query(collection(db, 'manutencoes'), where('STATUS', 'in', ['aberta', 'andamento'])), 'manutencoes');
+    ouvir(query(collection(db, 'nao_conformidades'), where('STATUS', '==', 'aberta')), 'ncs');
+    ouvir(query(collection(db, 'checklists'), where('DATA_HORA', '>=', inicioHoje)), 'checklists');
+  });
+
+  function unidadesPermitidas() {
+    const todas = [...new Set(E.equipamentos.map((e) => String(e.UNIDADE || '').trim()).filter(Boolean))].sort();
+    if (E.acesso.todas) return todas;
+    const minhas = (E.acesso.unidades || []).map(norm);
+    return todas.filter((u) => minhas.includes(norm(u)));
+  }
+
+  function desenhar() {
+    const unidades = unidadesPermitidas();
+    if (E.unidade !== 'TODAS' && !unidades.includes(E.unidade)) E.unidade = 'TODAS';
+    const visiveis = unidades.map(norm);
+    const filtro = (x) => E.unidade === 'TODAS' ? visiveis.includes(norm(x.UNIDADE)) : norm(x.UNIDADE) === norm(E.unidade);
+
+    const eq = E.equipamentos.filter(filtro).filter((e) => norm(e.STATUS) !== 'inativo');
+    const prio = { alta: 0, media: 1, baixa: 2 };
+    const man = E.manutencoes.filter(filtro).sort((a, b) =>
+      (prio[norm(a.PRIORIDADE)] ?? 3) - (prio[norm(b.PRIORIDADE)] ?? 3) || String(a.ABERTA_EM).localeCompare(String(b.ABERTA_EM)));
+    const ncs = E.ncs.filter(filtro).sort((a, b) => String(a.ABERTA_EM).localeCompare(String(b.ABERTA_EM)));
+    const chk = E.checklists.filter(filtro);
+    const comChecklist = new Set(chk.map((c) => String(c.ID_EQUIPAMENTO)));
+    const emUso = eq.filter((e) => norm(e.STATUS) === 'em_uso');
+    const semChecklist = emUso.filter((e) => !comChecklist.has(String(e.ID_EQUIPAMENTO)));
+    const fora = eq.filter((e) => ['parado', 'manutencao'].includes(norm(e.STATUS)))
+      .sort((a, b) => String(a.STATUS_DESDE).localeCompare(String(b.STATUS_DESDE)));
+    const multi = E.unidade === 'TODAS' && unidades.length > 1;
+    const un = (x) => multi ? ' · ' + esc(x.UNIDADE) : '';
+    const rot = { em_uso: 'Em uso', manutencao: 'Em manutenção', parado: 'Parado', aberta: 'Aberta', andamento: 'Em andamento', alta: 'Alta', media: 'Média', baixa: 'Baixa' };
+    const tag = (v) => '<span class="tag ' + esc(norm(v)) + '">' + esc(rot[norm(v)] || v || '—') + '</span>';
+    const lista = (itens, render, vazio) => itens.length ? '<ul>' + itens.map(render).join('') + '</ul>' : '<div class="vazio">' + esc(vazio) + '</div>';
+    const kpi = (v, r, c) => '<div class="kpi ' + c + '"><b>' + esc(v) + '</b><span>' + esc(r) + '</span></div>';
+
+    raiz.innerHTML =
+      '<header><img src="logo.png" alt=""><div class="t"><strong>Central de Frota · Painel ao vivo</strong>' +
+      '<span><i class="live' + (E.online ? '' : ' off') + '"></i>' +
+      (E.online ? 'Ao vivo' : 'Sem conexão — mostrando últimos dados') +
+      (E.atualizado ? ' · ' + E.atualizado.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '') +
+      ' · ' + esc(E.user.email) + '</span></div>' +
+      '<a class="btn ghost" href="./">App</a><button class="ghost" id="sair">Sair</button></header>' +
+      '<main>' +
+      (unidades.length > 1 ? '<div class="chips" role="group" aria-label="Unidade">' +
+        ['TODAS', ...unidades].map((u) => '<button class="chip" data-u="' + esc(u) + '" aria-pressed="' + (u === E.unidade) + '">' + esc(u === 'TODAS' ? 'Todas' : u) + '</button>').join('') + '</div>' : '') +
+      (unidades.length ? '' : '<section style="margin-bottom:14px"><div class="vazio">Nenhum dado disponível ainda para as suas unidades. O espelho da planilha atualiza em até 1 minuto.</div></section>') +
+      '<div class="kpis">' +
+        kpi(emUso.length + '/' + eq.length, 'Em uso', 'uso') +
+        kpi(eq.filter((e) => norm(e.STATUS) === 'manutencao').length, 'Em manutenção', 'manut') +
+        kpi(eq.filter((e) => norm(e.STATUS) === 'parado').length, 'Parados', 'parado') +
+        kpi(man.length, 'Chamados em aberto', 'info') +
+        kpi(ncs.length, 'Não conformidades', 'parado') +
+        kpi((emUso.length - semChecklist.length) + '/' + emUso.length, 'Checklist de hoje', 'uso') +
+      '</div>' +
+      '<div class="cols">' +
+        '<section><h2>Chamados em aberto <span>' + man.length + '</span></h2>' + lista(man, (m) =>
+          '<li><div class="m"><strong>' + esc(m.TITULO || m.ID_MANUTENCAO) + '</strong><small>' + esc(m.NOME_EQUIPAMENTO) + un(m) + ' · ' + esc(m.ID_MANUTENCAO) +
+          ' · ' + esc(rot[norm(m.STATUS)] || m.STATUS) + ' · aberto ' + esc(ha(m.ABERTA_EM)) + '</small></div>' + tag(m.PRIORIDADE) + '</li>',
+          'Nenhum chamado em aberto.') + '</section>' +
+        '<section><h2>Equipamentos fora de operação <span>' + fora.length + '</span></h2>' + lista(fora, (e) =>
+          '<li><div class="m"><strong>' + esc(e.NOME) + (e.CODIGO ? ' (' + esc(e.CODIGO) + ')' : '') + '</strong><small>' + esc(e.TIPO) + un(e) +
+          (e.STATUS_DESDE ? ' · ' + esc(ha(e.STATUS_DESDE)) : '') + '</small></div>' + tag(e.STATUS) + '</li>',
+          'Toda a frota está em uso.') + '</section>' +
+        '<section><h2>Não conformidades abertas <span>' + ncs.length + '</span></h2>' + lista(ncs, (n) =>
+          '<li><div class="m"><strong>' + esc(n.ITEM) + '</strong><small>' + esc(n.NOME_EQUIPAMENTO) + un(n) + ' · ' + esc(fmt(n.ABERTA_EM)) +
+          (n.DESCRICAO ? ' · ' + esc(n.DESCRICAO) : '') + '</small></div></li>',
+          'Nenhuma não conformidade aberta.') + '</section>' +
+        '<section><h2>Sem checklist hoje <span>' + semChecklist.length + '</span></h2>' + lista(semChecklist, (e) =>
+          '<li><div class="m"><strong>' + esc(e.NOME) + (e.CODIGO ? ' (' + esc(e.CODIGO) + ')' : '') + '</strong><small>' + esc(e.TIPO) + un(e) + '</small></div></li>',
+          'Todos os equipamentos em uso já fizeram o checklist de hoje.') + '</section>' +
+      '</div></main>';
+
+    document.getElementById('sair').onclick = () => signOut(auth);
+    raiz.querySelectorAll('.chip').forEach((b) => { b.onclick = () => { E.unidade = b.dataset.u; desenhar(); }; });
+  }
+}
+</script>
+</body>
+</html>
