@@ -38,6 +38,21 @@ const PRIORIDADE_MANUTENCAO = {
   alta:  { label: 'Alta',  cls: 'alta' }
 };
 
+// [OUT/2026] Setor — segundo nível de separação, logo abaixo da unidade.
+// Os valores da esquerda são os gravados na planilha (coluna SETOR).
+const SETORES = {
+  FABRICA: { label: 'Fábrica', ic: '🏭', sub: 'Equipamentos e manutenções da fábrica' },
+  OPERACAO: { label: 'Operação', ic: '🚜', sub: 'Equipamentos e manutenções da operação' }
+};
+function setorLabel(valor) {
+  const s = SETORES[String(valor || '').toUpperCase()];
+  return s ? s.label : (valor || '—');
+}
+// "Macatuba · Operação" — usado nos títulos das telas.
+function unidadeSetorLabel() {
+  return S.unidade.UNIDADE + (S.setor ? ' · ' + setorLabel(S.setor) : '');
+}
+
 const RESPOSTA_CHECKLIST = {
   ok:  { label: 'OK',  cls: 'ok' },
   nok: { label: 'NOK', cls: 'nok' },
@@ -96,6 +111,14 @@ async function api(action, payload, tentativa) {
   const ehCriacao = action.indexOf('create') === 0;
   let chaveReq = null;
   let envio = payload;
+  // [OUT/2026] Todo pedido leva o setor escolhido no login, do mesmo jeito
+  // que leva a unidade — o servidor só devolve/grava o que é daquele setor.
+  // Quem já informa o setor por conta própria (cadastro de equipamento)
+  // não é sobrescrito.
+  if (S.setor && !(payload && payload.setor)) {
+    payload = Object.assign({}, payload, { setor: S.setor });
+    envio = payload;
+  }
   if (ehCriacao) {
     chaveReq = action + '|' + hashTexto(JSON.stringify(payload || {}));
     if (!REQ_IDS[chaveReq]) REQ_IDS[chaveReq] = novoIdRequisicao();
@@ -158,6 +181,7 @@ function flattenParams(obj) {
 
 const S = {
   unidade: null,        // {ID_UNIDADE, UNIDADE}
+  setor: null,          // 'FABRICA' | 'OPERACAO' — escolhido no login, depois da unidade
   cargo: null,          // 'ADMIN' | 'OPERADOR' — escolhido no login, antes do usuário
   usuario: null,        // {ID_USUARIO, NOME, USUARIO, TIPO, UNIDADE}
   token: null,          // token de sessão devolvido pelo servidor no login
@@ -174,6 +198,7 @@ const S = {
 
 function resetSession() {
   S.unidade = null;
+  S.setor = null;
   S.cargo = null;
   S.usuario = null;
   S.token = null;
@@ -198,7 +223,7 @@ const CHAVE_SESSAO = 'centralDeFrota_sessao';
 function salvarSessao() {
   try {
     sessionStorage.setItem(CHAVE_SESSAO, JSON.stringify({
-      unidade: S.unidade, cargo: S.cargo, usuario: S.usuario, token: S.token
+      unidade: S.unidade, setor: S.setor, cargo: S.cargo, usuario: S.usuario, token: S.token
     }));
   } catch (e) { /* sem armazenamento: o app funciona igual, só não lembra no F5 */ }
 }
@@ -207,8 +232,10 @@ function restaurarSessao() {
     const bruto = sessionStorage.getItem(CHAVE_SESSAO);
     if (!bruto) return;
     const s = JSON.parse(bruto);
-    if (s && s.token && s.usuario && s.unidade) {
-      S.unidade = s.unidade; S.cargo = s.cargo; S.usuario = s.usuario; S.token = s.token;
+    // Sessão guardada antes de existir setor não é reaproveitada: a pessoa
+    // passa pelo login de novo e escolhe o setor.
+    if (s && s.token && s.usuario && s.unidade && SETORES[s.setor]) {
+      S.unidade = s.unidade; S.setor = s.setor; S.cargo = s.cargo; S.usuario = s.usuario; S.token = s.token;
       S.screen = 'painel';
     }
   } catch (e) { /* dado inválido: começa do login */ }
@@ -632,7 +659,7 @@ function nomeArquivo(prefixo, extensao) {
 // ------------------------- CACHES DE APOIO -------------------------
 
 async function carregarEquipamentos(incluirInativos) {
-  const chave = 'equip_' + S.unidade.UNIDADE + (incluirInativos ? '_todos' : '');
+  const chave = 'equip_' + S.unidade.UNIDADE + '_' + (S.setor || '') + (incluirInativos ? '_todos' : '');
   if (S.cache[chave]) return S.cache[chave];
   const lista = await api('getEquipamentos', {
     unidade: S.unidade.UNIDADE,
@@ -723,6 +750,7 @@ document.getElementById('btnLogout').onclick = function () { resetSession(); ren
 
 const SCREENS = {
   loginUnidade: renderLoginUnidade,
+  loginSetor: renderLoginSetor,
   loginCargo: renderLoginCargo,
   loginUsuario: renderLoginUsuario,
   loginSenha: renderLoginSenha,
@@ -802,7 +830,7 @@ function updateChrome() {
   }
   topbar.hidden = false;
   salvarSessao();
-  document.getElementById('topbarUnidade').textContent = S.unidade.UNIDADE;
+  document.getElementById('topbarUnidade').textContent = unidadeSetorLabel();
   document.getElementById('topbarUsuario').textContent = S.usuario.NOME + ' · ' + (ehAdmin() ? 'Admin' : 'Operador');
 
   // Barra de abas de unidade — só existe pra quem tem UNIDADE = TODAS
@@ -881,17 +909,42 @@ async function renderLoginUnidade() {
     unidades.forEach(function (u) {
       const item = el('<button type="button" class="list-item" style="width:100%">' +
         '<span class="list-item__title">' + escapeHtml(u.UNIDADE) + '</span><span>›</span></button>');
-      item.onclick = function () { S.unidade = u; go('loginCargo'); };
+      item.onclick = function () { S.unidade = u; S.setor = null; go('loginSetor'); };
       wrap.appendChild(item);
     });
   } catch (e) { /* toast já mostrado */ }
 }
 
+// [OUT/2026] Segundo passo do login: Fábrica ou Operação. Mesmo jeito da
+// unidade — escolheu, o app inteiro só mostra o que é daquele setor.
+function renderLoginSetor() {
+  appendHtml(app,
+    screenHeader('Login · ' + S.unidade.UNIDADE, 'Qual o setor?', 'Selecione o setor para continuar') +
+    '<div class="stack" style="gap:12px">' +
+      '<button class="btn btn--outline btn--sm" id="btnVoltarUnidadeSetor" style="align-self:flex-start;margin-top:-6px">← Trocar unidade</button>' +
+      '<div class="card stack" id="setoresList"></div>' +
+    '</div>'
+  );
+  document.getElementById('btnVoltarUnidadeSetor').onclick = function () { go('loginUnidade'); };
+  const wrap = document.getElementById('setoresList');
+  Object.keys(SETORES).forEach(function (k) {
+    const item = el(
+      '<button type="button" class="list-item" style="width:100%">' +
+        '<span><span class="list-item__title">' + SETORES[k].ic + ' ' + escapeHtml(SETORES[k].label) + '</span>' +
+        '<div class="list-item__sub">' + escapeHtml(SETORES[k].sub) + '</div></span>' +
+        '<span>›</span>' +
+      '</button>'
+    );
+    item.onclick = function () { S.setor = k; go('loginCargo'); };
+    wrap.appendChild(item);
+  });
+}
+
 function renderLoginCargo() {
   appendHtml(app,
-    screenHeader('Login · ' + S.unidade.UNIDADE, 'Qual o seu cargo?', 'Selecione como você vai acessar') +
+    screenHeader('Login · ' + unidadeSetorLabel(), 'Qual o seu cargo?', 'Selecione como você vai acessar') +
     '<div class="stack" style="gap:12px">' +
-      '<button class="btn btn--outline btn--sm" id="btnVoltarUnidadeCargo" style="align-self:flex-start;margin-top:-6px">← Trocar unidade</button>' +
+      '<button class="btn btn--outline btn--sm" id="btnVoltarUnidadeCargo" style="align-self:flex-start;margin-top:-6px">← Trocar setor</button>' +
       '<div class="card stack">' +
         '<button type="button" class="list-item" id="btnCargoOperador" style="width:100%">' +
           '<span><span class="list-item__title">🧑‍🔧 Operador</span>' +
@@ -906,14 +959,14 @@ function renderLoginCargo() {
       '</div>' +
     '</div>'
   );
-  document.getElementById('btnVoltarUnidadeCargo').onclick = function () { go('loginUnidade'); };
+  document.getElementById('btnVoltarUnidadeCargo').onclick = function () { go('loginSetor'); };
   document.getElementById('btnCargoOperador').onclick = function () { S.cargo = 'OPERADOR'; go('loginUsuario'); };
   document.getElementById('btnCargoAdmin').onclick = function () { S.cargo = 'ADMIN'; go('loginUsuario'); };
 }
 
 async function renderLoginUsuario() {
   appendHtml(app,
-    screenHeader('Login · ' + S.unidade.UNIDADE, 'Quem é você?', 'Selecione seu usuário') +
+    screenHeader('Login · ' + unidadeSetorLabel(), 'Quem é você?', 'Selecione seu usuário') +
     '<div class="stack" style="gap:12px">' +
       '<button class="btn btn--outline btn--sm" id="btnVoltarUnidade" style="align-self:flex-start;margin-top:-6px">← Voltar</button>' +
       '<div class="card stack" id="usuariosList"><p class="subtle">Carregando usuários…</p></div>' +
@@ -959,7 +1012,7 @@ async function renderLoginUsuario() {
 function renderLoginSenha() {
   const u = S.pendingUser;
   appendHtml(app,
-    screenHeader('Login admin · ' + S.unidade.UNIDADE, u.NOME, 'Digite sua senha para acessar a área administrativa') +
+    screenHeader('Login admin · ' + unidadeSetorLabel(), u.NOME, 'Digite sua senha para acessar a área administrativa') +
     '<div class="card stack">' +
       '<div class="field"><label for="inpSenha">Senha</label><input type="password" id="inpSenha" autofocus></div>' +
       '<button class="btn btn--primary btn--block" id="btnEntrar">Entrar</button>' +
@@ -1117,7 +1170,7 @@ function montarVisaoGeralUnidades(body, d) {
 // ------------------------- PAINEL -------------------------
 
 async function renderPainel() {
-  appendHtml(app, screenHeader('Painel · ' + S.unidade.UNIDADE, 'Olá, ' + S.usuario.NOME,
+  appendHtml(app, screenHeader('Painel · ' + unidadeSetorLabel(), 'Olá, ' + S.usuario.NOME,
     'Situação da frota agora'));
   const body = el('<div class="stack"><p class="subtle">Carregando painel…</p></div>');
   app.appendChild(body);
@@ -1141,7 +1194,7 @@ async function renderPainel() {
   body.appendChild(el(
     '<div class="kpi-grid">' +
       kpi(ind.inativos, 'Inativos', 'kpi--inativo') +
-      kpi(resumo.feitos + '/' + resumo.total, 'Checklists hoje') +
+      (ehAdmin() ? kpi(resumo.feitos + '/' + resumo.total, 'Checklists hoje') : '') +
       kpi(ind.naoConformidadesAbertas, 'NCs abertas', 'kpi--parado') +
       kpi(ind.manutencoesAbertas + ind.manutencoesAndamento, 'Manutenções ativas', 'kpi--accent') +
     '</div>'
@@ -1186,11 +1239,17 @@ async function renderPainel() {
   }
 
   // ---- Checklist do dia ----
+  // [OUT/2026] Só Administrador e Gerente veem a lista de feitos/pendentes
+  // do dia. O Operador continua fazendo o checklist pela aba "Checklist".
+  if (!ehAdmin()) {
+    body.appendChild(el('<p class="subtle" style="text-align:center">Atualizado em ' + fmtDataHora(d.geradoEm) + '</p>'));
+    return;
+  }
   const cardChk = el('<div class="card stack"><h3 class="title-lg">✅ Checklist do dia</h3>' +
     '<p class="subtle" style="margin-top:-6px">' + resumo.feitos + ' feito(s) · ' + resumo.pendentes + ' pendente(s)</p></div>');
   body.appendChild(cardChk);
   if (!d.checklistDoDia.length) {
-    cardChk.appendChild(el('<p class="subtle">Nenhum equipamento em uso nesta unidade hoje (parados e em manutenção não entram no checklist).</p>'));
+    cardChk.appendChild(el('<p class="subtle">Nenhum equipamento em uso neste setor hoje (parados e em manutenção não entram no checklist).</p>'));
   } else {
     d.checklistDoDia.forEach(function (c) {
       const item = el(
@@ -2243,7 +2302,7 @@ async function renderHistorico() {
 // ------------------------- EQUIPAMENTOS (ADMIN) -------------------------
 
 async function renderEquipamentos() {
-  appendHtml(app, screenHeader('Equipamentos', 'Frota da unidade', 'Cadastro, status e histórico dos equipamentos'));
+  appendHtml(app, screenHeader('Equipamentos', 'Frota · ' + setorLabel(S.setor), 'Cadastro, status e histórico dos equipamentos de ' + unidadeSetorLabel()));
 
   const btnNovo = el('<button class="btn btn--primary btn--block">＋ Novo equipamento</button>');
   btnNovo.onclick = function () { go('equipamentoForm', { equipamentoAtual: null }); };
@@ -2301,7 +2360,7 @@ async function renderEquipamentos() {
         ['ID_EQUIPAMENTO', 'ID'], ['NOME', 'Nome'], ['CODIGO', 'Código'], ['TIPO', 'Tipo'],
         ['STATUS', 'Status'], ['STATUS_DESDE', 'Status desde', fmtDataHora],
         ['TEMPO_NO_STATUS_TEXTO', 'Tempo no status'], ['OBSERVACOES', 'Observações'],
-        ['CRIADO_EM', 'Criado em', fmtDataHora], ['UNIDADE', 'Unidade']
+        ['CRIADO_EM', 'Criado em', fmtDataHora], ['UNIDADE', 'Unidade'], ['SETOR', 'Setor', setorLabel]
       ], lista);
     };
     body.appendChild(btnCsv);
@@ -2329,7 +2388,7 @@ async function renderEquipamentoForm() {
   const editando = !!e;
   appendHtml(app, screenHeader(editando ? 'Editar equipamento' : 'Novo equipamento',
     editando ? e.NOME : 'Cadastrar equipamento',
-    editando ? 'Código ' + (e.CODIGO || '—') : 'Unidade ' + S.unidade.UNIDADE));
+    editando ? 'Código ' + (e.CODIGO || '—') + ' · ' + setorLabel(e.SETOR || S.setor) : 'Unidade ' + S.unidade.UNIDADE));
   app.appendChild(botaoVoltar('equipamentos'));
 
   const card = el('<div class="card stack"><p class="subtle">Carregando…</p></div>');
@@ -2357,6 +2416,16 @@ async function renderEquipamentoForm() {
   selTipo.select.onchange = atualizarOutro;
   atualizarOutro();
 
+  // [OUT/2026] Setor do equipamento: decide em qual setor ele aparece e
+  // para quem vai o e-mail quando abrirem manutenção dele.
+  const setorAtual = editando ? (SETORES[String(e.SETOR || '').toUpperCase()] ? String(e.SETOR).toUpperCase() : S.setor) : S.setor;
+  const selSetor = choiceField(card, {
+    label: 'Setor', required: true, value: setorAtual,
+    options: Object.keys(SETORES).map(function (k) {
+      return { value: k, label: SETORES[k].ic + ' ' + SETORES[k].label };
+    })
+  });
+
   const selStatus = selectField(card, {
     label: 'Status', semVazio: true,
     value: editando ? e.STATUS : 'em_uso',
@@ -2377,12 +2446,14 @@ async function renderEquipamentoForm() {
   card.appendChild(btn);
   btn.onclick = async function () {
     if (!nome.getValue()) { toast('Informe o nome do equipamento', true); return; }
+    if (!selSetor.getValue()) { toast('Escolha o setor: Fábrica ou Operação', true); return; }
     const tipoFinal = selTipo.getValue() === 'Outro' ? (outroTipo.getValue() || 'Outro') : selTipo.getValue();
     const payload = {
       idUsuario: S.usuario.ID_USUARIO,
       nome: nome.getValue(),
       codigo: codigo.getValue(),
       tipo: tipoFinal,
+      setor: selSetor.getValue(),
       status: selStatus.getValue(),
       observacoes: obs.getValue()
     };
@@ -2391,11 +2462,15 @@ async function renderEquipamentoForm() {
       if (editando) {
         payload.idEquipamento = e.ID_EQUIPAMENTO;
         await api('updateEquipamento', payload);
-        toast('Equipamento atualizado!', false, true);
+        toast(payload.setor !== S.setor
+          ? 'Equipamento movido para ' + setorLabel(payload.setor) + '.'
+          : 'Equipamento atualizado!', false, true);
       } else {
         payload.unidade = S.unidade.UNIDADE;
         await api('createEquipamento', payload);
-        toast('Equipamento cadastrado!', false, true);
+        toast(payload.setor !== S.setor
+          ? 'Equipamento cadastrado em ' + setorLabel(payload.setor) + '.'
+          : 'Equipamento cadastrado!', false, true);
       }
       limparCacheEquipamentos();
       go('equipamentos');
@@ -3166,23 +3241,45 @@ function montarRelatorioExecutivo(body, r, filtroAtual) {
 
 // ------------------------- MAIS (menu do admin) -------------------------
 
+// Cartão "Trocar setor" da tela Mais — alterna entre Fábrica e Operação
+// sem precisar sair e entrar de novo.
+function cartaoTrocarSetor() {
+  const outro = S.setor === 'FABRICA' ? 'OPERACAO' : 'FABRICA';
+  const item = el(
+    '<button type="button" class="list-item" style="width:100%;padding:16px">' +
+      '<span class="row" style="gap:12px"><span style="font-size:22px">🔁</span>' +
+      '<span><span class="list-item__title">Trocar para ' + escapeHtml(setorLabel(outro)) + '</span>' +
+      '<div class="list-item__sub">Setor atual: ' + escapeHtml(setorLabel(S.setor)) + '</div></span></span>' +
+      '<span>›</span>' +
+    '</button>'
+  );
+  item.onclick = function () {
+    S.setor = outro;
+    S.cache = {};
+    toast('Setor: ' + setorLabel(outro), false, true);
+    go('painel');
+  };
+  return item;
+}
+
 function renderMais() {
   if (!ehAdmin()) {
     // Operador só tem consultas aqui — as ações (checklist, abertura,
     // lavagem, troca de gás) já têm aba própria na navegação principal.
     appendHtml(app,
-      screenHeader('Mais', 'Consultas', 'Preventivas e histórico da unidade ' + S.unidade.UNIDADE) +
-      '<div class="stack">' +
+      screenHeader('Mais', 'Consultas', 'Preventivas e histórico de ' + unidadeSetorLabel()) +
+      '<div class="stack" id="maisLista">' +
         menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
         menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
       '</div>'
     );
     bindMenuCards();
+    document.getElementById('maisLista').appendChild(cartaoTrocarSetor());
     return;
   }
   appendHtml(app,
-    screenHeader('Mais', 'Administração', 'Cadastros e acompanhamento da unidade ' + S.unidade.UNIDADE) +
-    '<div class="stack">' +
+    screenHeader('Mais', 'Administração', 'Cadastros e acompanhamento de ' + unidadeSetorLabel()) +
+    '<div class="stack" id="maisLista">' +
       menuCard('🚜', 'Equipamentos', 'Cadastrar, editar status e excluir', 'equipamentos') +
       menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
       menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
@@ -3193,6 +3290,7 @@ function renderMais() {
     '</div>'
   );
   bindMenuCards();
+  document.getElementById('maisLista').appendChild(cartaoTrocarSetor());
 }
 
 // ------------------------- CONFIGURAÇÕES (ADMIN) -------------------------
