@@ -801,8 +801,6 @@ const TAB_PAI = {
   equipamentoForm: 'equipamentos',
   equipamentos: 'mais',
   naoConformidades: 'mais',
-  relatorioGas: 'mais',
-  relatorioExecutivo: 'mais',
   configuracoes: 'mais'
 };
 
@@ -874,7 +872,9 @@ function updateChrome() {
     ? [
         { s: 'painel', ic: '📊', label: 'Painel' },
         { s: 'manutencoes', ic: '🔧', label: 'Manutenções' },
-        { s: 'relatorios', ic: '📈', label: 'Relatórios' },
+        { s: 'relatorios', ic: '📈', label: 'Resumo' },
+        { s: 'relatorioExecutivo', ic: '📊', label: 'Executivo' },
+        { s: 'relatorioGas', ic: '⛽', label: 'Gás' },
         { s: 'mais', ic: '☰', label: 'Mais' }
       ]
     : [
@@ -2078,8 +2078,9 @@ function renderManutencaoDetalhe() {
     linhaInfo(m.STATUS === 'concluida' ? 'Total (abertura → fim)' : 'Total até agora',
       '<strong class="mono">' + escapeHtml(m.TEMPO_TOTAL_TEXTO || '—') + '</strong>')
   );
-  linha.appendChild(el('<div class="note">Os tempos contam só o expediente: segunda a sexta, das 07:30 às 02:30. ' +
-    'Madrugada e fim de semana não entram.</div>'));
+  linha.appendChild(el('<div class="note">Os tempos contam só o expediente do setor, de segunda a sexta. ' +
+    (S.setor === 'FABRICA' ? 'Fábrica: direto, de segunda 05:00 até sábado 06:00.'
+      : 'Operação: 07:30 às 02:30, sem a hora do almoço (12:00 às 13:00).') + '</div>'));
 
   // ---- Mudança de status: só o Administrador ----
   if (!ehAdmin()) return;
@@ -2713,6 +2714,78 @@ function montarRelatorio(body, r, filtroAtual) {
   };
   body.appendChild(btnPdf);
 
+  // ---- [OUT/2026] RESUMO GERAL DA FROTA ----
+  // Dois números que não são a mesma coisa:
+  //  • Em operação  = horas que a máquina realmente rodou (horímetro
+  //    anotado em cada troca de gás do período);
+  //  • Sem manutenção = expediente em que ela não estava quebrada nem
+  //    parada (disponível — não quer dizer que trabalhou).
+  const imp = r.impacto || {};
+  const pctTxt = function (v) { return v === null || v === undefined ? '—' : String(v).replace('.', ',') + '%'; };
+  const cardResumo = el('<div class="card stack"><h3 class="title-lg">📋 Resumo geral da frota</h3>' +
+    '<p class="subtle" style="margin-top:-6px">' + escapeHtml(r.periodo.label) + '</p></div>');
+  body.appendChild(cardResumo);
+  cardResumo.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(imp.operacaoRealTexto || '—', 'Em operação (horímetro)', 'kpi--uso') +
+      kpi(imp.semManutencaoTexto || imp.operacaoTexto || '0min', 'Sem manutenção (disponível)', 'kpi--accent') +
+      kpi(imp.manutencaoTexto || '0min', 'Em manutenção', 'kpi--manut') +
+      kpi(imp.paradoTexto || '0min', 'Parado', 'kpi--parado') +
+    '</div>'
+  ));
+  cardResumo.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(pctTxt(imp.disponibilidadePct), 'Disponibilidade', 'kpi--uso') +
+      kpi(pctTxt(imp.utilizacaoPct), 'Utilização (rodou ÷ disponível)', 'kpi--accent') +
+      kpi(pctTxt(imp.impactoPct), 'Impacto (expediente perdido)', 'kpi--parado') +
+      kpi(imp.indisponibilidadeTexto || '0min', 'Sem máquina (manut. + parado)', 'kpi--parado') +
+    '</div>'
+  ));
+  cardResumo.appendChild(el('<div class="note">' +
+    '<strong>Em operação</strong> é o que a máquina realmente rodou: a soma das horas do horímetro em cada troca de gás do período' +
+    (imp.maquinasComHorimetro !== undefined ? ' (' + imp.maquinasComHorimetro + ' máquina(s) com troca no período)' : '') + '. ' +
+    '<strong>Sem manutenção</strong> é o tempo de expediente em que ela não estava quebrada nem parada. ' +
+    'Expediente contado: ' + escapeHtml(imp.expediente || '—') + '.</div>'));
+
+  // ---- Por máquina ----
+  const hpm = (r.horasPorMaquina || []).slice();
+  cardResumo.appendChild(el('<h3 class="title-lg" style="font-size:15px;margin-top:6px">Por máquina</h3>'));
+  if (!hpm.length) {
+    cardResumo.appendChild(el('<p class="subtle">Nenhum equipamento ativo neste setor.</p>'));
+  } else {
+    const wrapTabela = el('<div style="overflow-x:auto"></div>');
+    wrapTabela.appendChild(tabelaHtml([
+      ['nomeEquipamento', 'Máquina'], ['operacaoTexto', 'Em operação'], ['semManutencaoTexto', 'Sem manutenção'],
+      ['manutencaoTexto', 'Em manutenção'], ['paradoTexto', 'Parada'],
+      ['disponibilidadePct', 'Disponib.', pctTxt], ['utilizacaoPct', 'Utilização', pctTxt]
+    ], hpm));
+    cardResumo.appendChild(wrapTabela);
+    const btnCsvH = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
+    btnCsvH.onclick = function () {
+      downloadCSV(nomeArquivo('resumo_frota_por_maquina', 'csv'), [
+        ['nomeEquipamento', 'Máquina'], ['codigo', 'Código'], ['tipo', 'Tipo'],
+        ['operacaoTexto', 'Em operação (horímetro)'], ['trocasGas', 'Trocas de gás'],
+        ['semManutencaoTexto', 'Sem manutenção'], ['manutencaoTexto', 'Em manutenção'], ['paradoTexto', 'Parada'],
+        ['indisponibilidadeTexto', 'Sem máquina'], ['disponibilidadePct', 'Disponibilidade (%)'], ['utilizacaoPct', 'Utilização (%)']
+      ], hpm);
+    };
+    cardResumo.appendChild(btnCsvH);
+  }
+
+  // ---- Tempo médio de cada etapa do chamado ----
+  const tm = r.temposMedios || {};
+  const cardTempos = el('<div class="card stack"><h3 class="title-lg">🕒 Tempo médio por etapa do chamado</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Média dos ' + (tm.finalizadas || 0) + ' chamado(s) finalizado(s) no período, em horas de expediente</p></div>');
+  body.appendChild(cardTempos);
+  cardTempos.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(tm.acionamentoTexto || '—', 'Abertura → técnico acionado', 'kpi--parado') +
+      kpi(tm.chegadaTexto || '—', 'Acionado → início', 'kpi--accent') +
+      kpi(tm.execucaoTexto || '—', 'Início → fim', 'kpi--manut') +
+      kpi(tm.totalTexto || '—', 'Total do chamado', 'kpi--uso') +
+    '</div>'
+  ));
+
   // ---- Indicadores ----
   body.appendChild(el('<h3 class="title-lg" style="margin-top:4px">Indicadores do período</h3>'));
   body.appendChild(el(
@@ -2745,66 +2818,6 @@ function montarRelatorio(body, r, filtroAtual) {
       kpi(ind.manutencoesCorretivas, 'Corretivas') +
     '</div>'
   ));
-
-  // ---- Impacto: horas sem máquina x horas em operação, no período ----
-  const imp = r.impacto || {};
-  const pctTxt = function (v) { return v === null || v === undefined ? '—' : String(v).replace('.', ',') + '%'; };
-  const cardImpacto = el('<div class="card stack"><h3 class="title-lg">⏱️ Horas da frota no período</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Soma de todas as máquinas, contando só o expediente (' +
-    escapeHtml(imp.expediente || 'seg a sex, 07:30 às 02:30') + '). Calculado pelo histórico de status de cada equipamento, ' +
-    'registrado a partir de 17/09/2026.</p></div>');
-  body.appendChild(cardImpacto);
-  cardImpacto.appendChild(el(
-    '<div class="kpi-grid">' +
-      kpi(imp.operacaoTexto || '0min', 'Em operação', 'kpi--uso') +
-      kpi(imp.manutencaoTexto || '0min', 'Em manutenção', 'kpi--manut') +
-      kpi(imp.paradoTexto || '0min', 'Parado', 'kpi--parado') +
-      kpi(imp.indisponibilidadeTexto || '0min', 'Sem máquina (manut. + parado)', 'kpi--parado') +
-    '</div>'
-  ));
-  cardImpacto.appendChild(el(
-    '<div class="kpi-grid">' +
-      kpi(pctTxt(imp.disponibilidadePct), 'Disponibilidade da frota', 'kpi--uso') +
-      kpi(pctTxt(imp.impactoPct), 'Impacto (expediente perdido)', 'kpi--parado') +
-    '</div>'
-  ));
-
-  // ---- Tempo médio de cada etapa do chamado ----
-  const tm = r.temposMedios || {};
-  const cardTempos = el('<div class="card stack"><h3 class="title-lg">🕒 Tempo médio por etapa do chamado</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Média dos ' + (tm.finalizadas || 0) + ' chamado(s) finalizado(s) no período, em horas de expediente</p></div>');
-  body.appendChild(cardTempos);
-  cardTempos.appendChild(el(
-    '<div class="kpi-grid">' +
-      kpi(tm.acionamentoTexto || '—', 'Abertura → técnico acionado', 'kpi--parado') +
-      kpi(tm.chegadaTexto || '—', 'Acionado → início', 'kpi--accent') +
-      kpi(tm.execucaoTexto || '—', 'Início → fim', 'kpi--manut') +
-      kpi(tm.totalTexto || '—', 'Total do chamado', 'kpi--uso') +
-    '</div>'
-  ));
-
-  // ---- Horas por máquina ----
-  const hpm = (r.horasPorMaquina || []).slice();
-  const cardHpm = el('<div class="card stack"><h3 class="title-lg">🚜 Horas por máquina</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Expediente de cada máquina no período: em operação, em manutenção e parada</p></div>');
-  body.appendChild(cardHpm);
-  if (!hpm.length) {
-    cardHpm.appendChild(el('<p class="subtle">Nenhum equipamento ativo neste setor.</p>'));
-  } else {
-    cardHpm.appendChild(tabelaHtml([
-      ['nomeEquipamento', 'Máquina'], ['emUsoTexto', 'Em operação'], ['manutencaoTexto', 'Em manutenção'],
-      ['paradoTexto', 'Parada'], ['disponibilidadePct', 'Disponibilidade', pctTxt]
-    ], hpm));
-    const btnCsvH = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
-    btnCsvH.onclick = function () {
-      downloadCSV(nomeArquivo('horas_por_maquina', 'csv'), [
-        ['nomeEquipamento', 'Máquina'], ['codigo', 'Código'], ['tipo', 'Tipo'],
-        ['emUsoTexto', 'Em operação'], ['manutencaoTexto', 'Em manutenção'], ['paradoTexto', 'Parada'],
-        ['indisponibilidadeTexto', 'Sem máquina'], ['disponibilidadePct', 'Disponibilidade (%)']
-      ], hpm);
-    };
-    cardHpm.appendChild(btnCsvH);
-  }
 
   // ---- Gráficos em painel escuro (CSS puro, sem biblioteca) ----
   body.appendChild(painelGrafico('Manutenções por status', 'Quantidade de manutenções em cada etapa no período',
@@ -2905,7 +2918,7 @@ function montarRelatorio(body, r, filtroAtual) {
 
   // ---- Comparativo: custo de gás × horas de operação real, por máquina ----
   const cardComparativo = el('<div class="card stack"><h3 class="title-lg">⚖️ Custo de gás × horas em operação</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Custo por hora que a máquina realmente trabalhou no período (não por hora entre trocas)</p></div>');
+    '<p class="subtle" style="margin-top:-6px">Custo do gás dividido pelas horas que a máquina rodou (horímetro das trocas do período)</p></div>');
   body.appendChild(cardComparativo);
   const comCusto = (r.comparativoCustoHorasOperacao || []).filter(function (c) { return c.custoGasTotal > 0; });
   if (!comCusto.length) {
@@ -3033,7 +3046,6 @@ function fmtMoeda(v) {
 
 async function renderRelatorioGas() {
   appendHtml(app, screenHeader('Relatório de Gás', 'Troca de gás da frota', 'Custos, horas de uso e ranking por equipamento — unidade ' + S.unidade.UNIDADE));
-  app.appendChild(botaoVoltar('mais'));
 
   const topo = el('<div class="stack" style="gap:8px"></div>');
   app.appendChild(topo);
@@ -3178,7 +3190,6 @@ const COLUNAS_TROCA_GAS = [
 
 async function renderRelatorioExecutivo() {
   appendHtml(app, screenHeader('Relatório Executivo', 'Manutenção, Lavagem e Gás', 'Resumo consolidado para apresentação à gestão — unidade ' + S.unidade.UNIDADE));
-  app.appendChild(botaoVoltar('mais'));
 
   const topo = el('<div class="stack" style="gap:8px"></div>');
   app.appendChild(topo);
@@ -3353,8 +3364,6 @@ function renderMais() {
       menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
       menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
-      menuCard('⛽', 'Relatório de Gás', 'Custos, horas de uso e ranking das trocas', 'relatorioGas') +
-      menuCard('📊', 'Relatório Executivo', 'Manutenção + Lavagem + Gás num resumo só, com PDF', 'relatorioExecutivo') +
       menuCard('⚙️', 'Configurações', 'Responsáveis do checklist, usuários e unidades', 'configuracoes') +
     '</div>'
   );
