@@ -1257,7 +1257,7 @@ async function renderVisaoGeralUnidades() {
   app.appendChild(topo);
   topo.appendChild(el('<h3 class="title-lg" style="font-size:15px">📄 Relatório de todas as unidades</h3>' +
     '<p class="subtle" style="margin-top:-6px">Manutenção + Lavagem + Troca de gás de todas as unidades, num PDF só</p>'));
-  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes' });
+  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes', onChange: function () { carregarExecutivoGestao(); } });
   const btnPdf = el('<button class="btn btn--accent btn--block">📄 Emitir relatório de todas as unidades</button>');
   topo.appendChild(btnPdf);
   btnPdf.onclick = async function () {
@@ -1280,12 +1280,29 @@ async function renderVisaoGeralUnidades() {
 
   const body = el('<div class="stack" style="margin-top:2px"><p class="subtle">Carregando comparativo das unidades…</p></div>');
   app.appendChild(body);
+  // [EXECUTIVO OUT/2026] Visão executiva da gestão: as frotas das três
+  // unidades juntas (do setor escolhido), no período do filtro acima.
+  const exec = el('<div class="stack" style="margin-top:2px"></div>');
+  async function carregarExecutivoGestao() {
+    exec.innerHTML = '<p class="subtle">Carregando visão executiva de todas as unidades…</p>';
+    const p = periodo.getValue();
+    const r = await api('getRelatorioExecutivo', { unidade: 'TODAS', periodo: p.periodo, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .catch(function () { return null; });
+    exec.innerHTML = '';
+    if (!r) { exec.appendChild(el(blocoFalhaCarregar())); return; }
+    exec.appendChild(el('<h3 class="title-lg" style="margin-top:6px">📊 Executivo — todas as unidades · ' + escapeHtml(setorLabel(S.setor)) + '</h3>' +
+      '<p class="subtle" style="margin-top:-6px">' + escapeHtml(r.periodo.label) + '</p>'));
+    montarFrotasExecutivo(exec, r.frotas);
+  }
+
   try {
     const d = await api('getVisaoGeralUnidades', {});
     montarVisaoGeralUnidades(body, d);
   } catch (e) {
     body.innerHTML = '<p class="subtle">Não foi possível carregar o comparativo das unidades.</p>';
   }
+  app.appendChild(exec);
+  carregarExecutivoGestao();
 }
 
 function montarVisaoGeralUnidades(body, d) {
@@ -3407,6 +3424,114 @@ async function renderRelatorioExecutivo() {
   load();
 }
 
+// [EXECUTIVO OUT/2026] Gráfico de barras deitadas, uma por frota.
+// itens: [{ rotulo, valor (número, define o tamanho), texto (o que aparece à direita) }]
+function cardBarras(titulo, subtitulo, itens, cor, vazioTexto) {
+  const card = el('<div class="card stack"><h3 class="title-lg" style="font-size:15px">' + escapeHtml(titulo) + '</h3>' +
+    (subtitulo ? '<p class="subtle" style="margin-top:-6px">' + escapeHtml(subtitulo) + '</p>' : '') + '</div>');
+  if (!itens || !itens.length) {
+    card.appendChild(el('<p class="subtle">' + escapeHtml(vazioTexto || 'Sem dados no período.') + '</p>'));
+    return card;
+  }
+  const LIMITE = 15;
+  const max = Math.max.apply(null, itens.map(function (i) { return Number(i.valor) || 0; }).concat([0.0001]));
+  itens.slice(0, LIMITE).forEach(function (i) {
+    card.appendChild(el(
+      '<div class="bar-row"><span class="label" style="width:38%;max-width:220px" title="' + escapeHtml(i.rotulo) + '">' + escapeHtml(i.rotulo) + '</span>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(3, ((Number(i.valor) || 0) / max) * 100) + '%' +
+        (cor ? ';background:' + cor : '') + '"></div></div>' +
+      '<span class="bar-val" style="width:auto;min-width:64px;white-space:nowrap">' + escapeHtml(i.texto) + '</span></div>'
+    ));
+  });
+  if (itens.length > LIMITE) card.appendChild(el('<p class="subtle">Mostrando as ' + LIMITE + ' maiores de ' + itens.length + '.</p>'));
+  return card;
+}
+
+// [EXECUTIVO OUT/2026] Bloco "por frota" do Relatório Executivo — usado na
+// tela da unidade e na visão da gestão (todas as unidades).
+function montarFrotasExecutivo(body, f) {
+  if (!f) return;
+  const horasTxt = function (h) { return String(h).replace('.', ',') + ' h'; };
+
+  // ---- Pontos de atenção ----
+  const corNivel = { alto: 'var(--st-parado)', medio: 'var(--accent)', baixo: 'var(--ink-soft)', ok: 'var(--st-uso)' };
+  const rotuloNivel = { alto: 'Alto', medio: 'Médio', baixo: 'Baixo', ok: 'OK' };
+  const cardPontos = el('<div class="card stack"><h3 class="title-lg">🚩 Pontos de atenção</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Montados automaticamente a partir dos números do período</p></div>');
+  body.appendChild(cardPontos);
+  (f.pontosDeAtencao || []).forEach(function (p) {
+    cardPontos.appendChild(el(
+      '<div class="list-item" style="cursor:default;border-left:4px solid ' + (corNivel[p.nivel] || 'var(--ink-soft)') + '">' +
+        '<span class="list-item__sub" style="font-size:13px;color:var(--ink)">' + escapeHtml(p.texto) + '</span>' +
+        '<span class="tag tag--na" style="white-space:nowrap">' + escapeHtml(rotuloNivel[p.nivel] || '') + '</span>' +
+      '</div>'
+    ));
+  });
+
+  // ---- Totais ----
+  body.appendChild(el('<h3 class="title-lg" style="margin-top:4px">🚜 Frotas no período</h3>'));
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(f.operacaoTotalTexto || '—', 'Horas totais em operação', 'kpi--uso') +
+      kpi(f.horasParadasTotalTexto || '0min', 'Horas totais paradas', 'kpi--parado') +
+      kpi(f.gasTotalTrocas || 0, 'Trocas de gás') +
+      kpi(fmtMoeda(f.gasCustoTotal || 0), 'Gasto com gás', 'kpi--accent') +
+    '</div>'
+  ));
+  body.appendChild(el('<p class="subtle" style="margin-top:-4px">Horas em operação = horímetro das trocas de gás (' + (f.maquinasComHorimetro || 0) +
+    ' máquina(s)). Horas paradas = manutenção + parada, só no expediente (' + escapeHtml(f.expediente || '') + ').</p>'));
+
+  // ---- Gráficos por frota ----
+  body.appendChild(cardBarras('Frotas paradas, em horas', 'Tempo sem operar (em manutenção + parada) dentro do expediente',
+    (f.paradasPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
+    'var(--st-parado)', 'Nenhuma frota ficou parada no período.'));
+  body.appendChild(cardBarras('Quantidade de manutenções por frota', 'Chamados abertos no período',
+    (f.manutencoesPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.quantidade, texto: x.quantidade + ' · ' + x.tempoTexto }; }),
+    'var(--accent)', 'Nenhuma manutenção no período.'));
+  body.appendChild(cardBarras('Horas em operação por frota', 'Horas rodadas pelo horímetro das trocas de gás do período',
+    (f.operacaoPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
+    'var(--st-uso)', 'Nenhuma troca de gás com horímetro no período.'));
+  const gas = f.gasPorFrota || [];
+  body.appendChild(cardBarras('Trocas de gás por frota', 'Quantidade de trocas no período',
+    gas.slice().sort(function (a, b) { return b.trocas - a.trocas; }).map(function (x) { return { rotulo: x.frota, valor: x.trocas, texto: x.trocas + 'x' }; }),
+    '#3B7DD8', 'Nenhuma troca de gás no período.'));
+  body.appendChild(cardBarras('Gasto com gás por frota', 'Custo das trocas do período',
+    gas.map(function (x) { return { rotulo: x.frota, valor: x.custo, texto: fmtMoeda(x.custo) }; }),
+    'var(--accent)', 'Nenhuma troca de gás no período.'));
+
+  // ---- Quem gastou e trocou mais, e se rodou mais ----
+  const cardGas = el('<div class="card stack"><h3 class="title-lg" style="font-size:15px">⛽ Quem gastou mais gás — e se rodou mais</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Compara cada máquina com a média da frota: ' + horasTxt(f.gasMediaHoras || 0) +
+    ' rodadas e ' + fmtMoeda(f.gasMediaCustoHora || 0) + ' por hora</p></div>');
+  body.appendChild(cardGas);
+  if (!gas.length) {
+    cardGas.appendChild(el('<p class="subtle">Nenhuma troca de gás no período.</p>'));
+    return;
+  }
+  const destaque = function (rotulo, x, valorTxt) {
+    return '<div class="list-item ' + (x.atencao ? 'is-warn' : 'is-ok') + '" style="cursor:default">' +
+      '<span><span class="list-item__title">' + rotulo + ': ' + escapeHtml(x.frota) + '</span>' +
+      '<div class="list-item__sub">' + valorTxt + ' · ' + escapeHtml(x.horasTexto) + ' rodadas · ' + escapeHtml(x.veredito) + '</div></span></div>';
+  };
+  if (f.maiorGasto) cardGas.appendChild(el(destaque('Mais gastou', f.maiorGasto, fmtMoeda(f.maiorGasto.custo) + ' em ' + f.maiorGasto.trocas + ' troca(s)')));
+  if (f.maisTrocas) cardGas.appendChild(el(destaque('Mais trocou', f.maisTrocas, f.maisTrocas.trocas + ' troca(s), ' + fmtMoeda(f.maisTrocas.custo))));
+  const wrap = el('<div style="overflow-x:auto"></div>');
+  wrap.appendChild(tabelaHtml([
+    ['frota', 'Frota'], ['trocas', 'Trocas'], ['custo', 'Gasto', fmtMoeda], ['kg', 'Kg', function (v) { return v === null || v === undefined ? '—' : v; }],
+    ['horasTexto', 'Horas rodadas'], ['custoPorHora', 'Custo por hora', function (v) { return v === null || v === undefined ? '—' : fmtMoeda(v); }],
+    ['veredito', 'Rodou mais?']
+  ], gas));
+  cardGas.appendChild(wrap);
+  const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
+  btnCsv.onclick = function () {
+    downloadCSV(nomeArquivo('gas_por_frota', 'csv'), [
+      ['frota', 'Frota'], ['trocas', 'Trocas'], ['custo', 'Gasto (R$)'], ['kg', 'Kg'], ['horas', 'Horas rodadas'],
+      ['custoPorHora', 'Custo por hora (R$)'], ['veredito', 'Rodou mais?']
+    ], gas);
+  };
+  cardGas.appendChild(btnCsv);
+}
+
 function montarRelatorioExecutivo(body, r, filtroAtual) {
   const mInd = r.manutencao.indicadores;
   const lav = r.lavagem;
@@ -3445,6 +3570,9 @@ function montarRelatorioExecutivo(body, r, filtroAtual) {
     btnPdf.textContent = '📄 Baixar relatório executivo em PDF';
   };
   body.appendChild(btnPdf);
+
+  // ---- [EXECUTIVO OUT/2026] Pontos de atenção e visão por frota ----
+  montarFrotasExecutivo(body, r.frotas);
 
   // ---- Manutenção ----
   body.appendChild(el('<h3 class="title-lg" style="margin-top:4px">🔧 Manutenção</h3>'));
