@@ -83,7 +83,7 @@ const STATUS_CHECKLIST = {
 // vezes demora pra "acordar" (cold start) ou fica na fila — mas nunca deveria
 // passar disso; se passar, é melhor avisar e permitir tentar de novo do que
 // parecer que o app travou.
-const API_TIMEOUT_MS = 25000;
+const API_TIMEOUT_MS = 30000;
 
 // [PERF 17/09] Gerar PDF (Slides + gráficos + Drive) é sempre mais lento
 // que uma leitura normal — ainda mais agora que o relatório geral e o
@@ -94,8 +94,106 @@ const API_TIMEOUT_MS = 25000;
 // ações específicas ganham um tempo de espera bem maior.
 const ACOES_LENTAS_TIMEOUT_MS = {
   gerarRelatorioPDF: 170000,
-  gerarRelatorioExecutivoPDF: 170000
+  gerarRelatorioExecutivoPDF: 170000,
+  // [ESTABILIDADE OUT/2026] Relatórios e histórico leem várias abas inteiras,
+  // e checklist/lavagem sobem fotos: ganham mais tempo antes de desistir.
+  getRelatorio: 70000,
+  getRelatorioExecutivo: 70000,
+  getRelatorioGas: 60000,
+  getHistorico: 60000,
+  getVisaoGeralUnidades: 60000,
+  createChecklist: 70000,
+  createLavagem: 70000
 };
+
+// ------------------------- [ESTABILIDADE OUT/2026] REDE -------------------------
+// 1. Trocar de tela cancela as leituras da tela anterior: elas não ocupam
+//    mais o servidor e a resposta atrasada não mexe na tela nova.
+// 2. A mesma leitura repetida em até 20 s (ir e voltar entre abas) usa a
+//    resposta guardada, sem ir ao servidor. Qualquer gravação apaga o que
+//    estava guardado, então o que você salvou aparece na hora.
+// 3. Resposta quebrada do servidor (página de erro do Google em vez de
+//    dados), queda de rede ou servidor ocupado: o app tenta de novo sozinho
+//    antes de mostrar erro. Só leituras, criações e login são repetidos —
+//    criação tem proteção contra duplicidade, as outras gravações não.
+let GERACAO_TELA = 0;
+const LEITURAS_ABERTAS = [];
+const LEITURAS_EM_CURSO = {};
+const MEMO_LEITURA = {};
+const MEMO_LEITURA_MS = 20000;
+let ULTIMA_FALHA_LEITURA = 0;
+const NUNCA = function () { return new Promise(function () {}); };
+function esperar(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+
+function cancelarLeiturasDaTelaAnterior() {
+  for (let i = LEITURAS_ABERTAS.length - 1; i >= 0; i--) {
+    const l = LEITURAS_ABERTAS[i];
+    if (l.geracao < GERACAO_TELA) {
+      l.cancelada = true;
+      try { l.controller.abort(); } catch (e) { /* já terminou */ }
+      LEITURAS_ABERTAS.splice(i, 1);
+    }
+  }
+}
+
+function limparMemoLeitura() {
+  Object.keys(MEMO_LEITURA).forEach(function (k) { delete MEMO_LEITURA[k]; });
+}
+
+function erroDeRede(tipo, mensagem) {
+  const e = new Error(mensagem);
+  e.tipo = tipo;
+  return e;
+}
+
+// Uma ida ao servidor. Devolve os dados, ou lança um erro com .tipo:
+// 'cancelada' | 'timeout' | 'rede' | 'resposta' | 'ocupado' | 'aplicacao'.
+async function irAoServidor(action, envio, isRead, timeoutMs, geracao) {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw erroDeRede('rede', 'Sem internet. Confira a conexão e tente de novo.');
+  }
+  const registro = { controller: new AbortController(), geracao: geracao, cancelada: false };
+  if (isRead) LEITURAS_ABERTAS.push(registro);
+  const timeoutId = setTimeout(function () { registro.estourou = true; registro.controller.abort(); }, timeoutMs);
+  try {
+    let res;
+    if (isRead) {
+      const q = Object.assign({ action: action }, flattenParams(envio));
+      if (S.token) q.token = S.token;
+      res = await fetch(API_URL + '?' + new URLSearchParams(q).toString(), { signal: registro.controller.signal });
+    } else {
+      res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
+        body: JSON.stringify({ action: action, payload: envio, token: S.token || '' }),
+        signal: registro.controller.signal
+      });
+    }
+    const texto = await res.text();
+    let json;
+    try { json = JSON.parse(texto); }
+    catch (e) {
+      // O Google devolveu uma página (erro, limite de uso, autorização) em
+      // vez dos dados. Fica registrado no console para diagnóstico.
+      console.error('[Central de Frota] Resposta inesperada em ' + action + ' (HTTP ' + res.status + '): ' + String(texto).slice(0, 300));
+      throw erroDeRede('resposta', 'O servidor não respondeu direito agora. Tente de novo em instantes.');
+    }
+    if (!json || json.ok !== true) {
+      const msg = (json && json.error) || 'Erro desconhecido';
+      throw erroDeRede(msg.indexOf('servidor está ocupado') > -1 ? 'ocupado' : 'aplicacao', msg);
+    }
+    return json.data;
+  } catch (err) {
+    if (err && err.tipo) throw err;
+    if (registro.cancelada) throw erroDeRede('cancelada', 'cancelada');
+    if (err && err.name === 'AbortError') throw erroDeRede('timeout', 'O servidor demorou muito pra responder. Tente novamente.');
+    throw erroDeRede('rede', 'Não foi possível falar com o servidor. Confira a internet e tente de novo.');
+  } finally {
+    clearTimeout(timeoutId);
+    const i = LEITURAS_ABERTAS.indexOf(registro);
+    if (i > -1) LEITURAS_ABERTAS.splice(i, 1);
+  }
+}
 
 // [OUT/2026] Cada registro novo (ações "create...") leva um idRequisicao.
 // Se o envio for repetido — automático depois de um timeout, ou manual —
@@ -111,13 +209,15 @@ function novoIdRequisicao() {
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
-async function api(action, payload, tentativa) {
+async function api(action, payload) {
   if (API_URL.indexOf('COLE_A_URL') > -1) {
     toast('Configure a API_URL no topo do app.js', true);
     throw new Error('API_URL não configurada');
   }
   const isRead = action.indexOf('get') === 0;
   const ehCriacao = action.indexOf('create') === 0;
+  const ehLogin = action.indexOf('login') === 0;
+  const geracao = GERACAO_TELA;
   let chaveReq = null;
   let envio = payload;
   // [OUT/2026] Todo pedido leva o setor escolhido no login, do mesmo jeito
@@ -133,48 +233,84 @@ async function api(action, payload, tentativa) {
     if (!REQ_IDS[chaveReq]) REQ_IDS[chaveReq] = novoIdRequisicao();
     envio = Object.assign({}, payload, { idRequisicao: REQ_IDS[chaveReq] });
   }
+
+  // Leitura repetida há pouco: usa a resposta guardada. Leitura idêntica
+  // ainda em andamento nesta mesma tela: espera a mesma, sem pedir de novo.
+  let chaveLeitura = null;
+  if (isRead) {
+    chaveLeitura = action + '|' + JSON.stringify(flattenParams(envio)) + '|' + (S.token || '');
+    const guardado = MEMO_LEITURA[chaveLeitura];
+    if (guardado && Date.now() - guardado.em < MEMO_LEITURA_MS) return JSON.parse(guardado.dados);
+    const emCurso = LEITURAS_EM_CURSO[geracao + '|' + chaveLeitura];
+    if (emCurso) return emCurso.then(function (texto) { return JSON.parse(texto); });
+  }
+
   const timeoutMs = ACOES_LENTAS_TIMEOUT_MS[action] || API_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+  const podeRepetir = isRead || ehCriacao || ehLogin;
+  const pausas = [1200, 3000];
+
+  const tentar = async function () {
+    let repeticoesRede = 0, repeticoesTimeout = 0;
+    for (;;) {
+      try {
+        return await irAoServidor(action, envio, isRead, timeoutMs, geracao);
+      } catch (err) {
+        if (err.tipo === 'cancelada') throw err;
+        const falhaPassageira = err.tipo === 'rede' || err.tipo === 'resposta' || err.tipo === 'ocupado';
+        if (podeRepetir && falhaPassageira && repeticoesRede < pausas.length) {
+          await esperar(pausas[repeticoesRede++]);
+          if (isRead && geracao !== GERACAO_TELA) throw erroDeRede('cancelada', 'cancelada');
+          continue;
+        }
+        // Timeout: leitura e criação (protegida por idRequisicao) repetem uma vez.
+        if (err.tipo === 'timeout' && (isRead || ehCriacao) && repeticoesTimeout < 1) {
+          repeticoesTimeout++;
+          if (isRead && geracao !== GERACAO_TELA) throw erroDeRede('cancelada', 'cancelada');
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
+
+  let promessaTexto = null;
+  if (isRead) {
+    // Guarda o resultado como texto: cada tela recebe a sua própria cópia.
+    promessaTexto = tentar().then(function (dados) { return JSON.stringify(dados === undefined ? null : dados); });
+    LEITURAS_EM_CURSO[geracao + '|' + chaveLeitura] = promessaTexto;
+    promessaTexto.then(function () {}, function () {}).then(function () { delete LEITURAS_EM_CURSO[geracao + '|' + chaveLeitura]; });
+  }
+
   try {
-    let res;
+    let dados;
     if (isRead) {
-      const q = Object.assign({ action: action }, flattenParams(envio));
-      if (S.token) q.token = S.token;
-      res = await fetch(API_URL + '?' + new URLSearchParams(q).toString(), { signal: controller.signal });
+      const texto = await promessaTexto;
+      MEMO_LEITURA[chaveLeitura] = { em: Date.now(), dados: texto };
+      // Chegou, mas a pessoa já trocou de tela: fica guardado para a próxima
+      // vez e não mexe na tela atual.
+      if (geracao !== GERACAO_TELA) return NUNCA();
+      dados = JSON.parse(texto);
     } else {
-      res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
-        body: JSON.stringify({ action: action, payload: envio, token: S.token || '' }),
-        signal: controller.signal
-      });
+      dados = await tentar();
+      // Gravou alguma coisa: nada do que estava guardado vale mais.
+      if (action.indexOf('gerar') !== 0) limparMemoLeitura();
     }
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || 'Erro desconhecido');
     if (chaveReq) delete REQ_IDS[chaveReq];
-    return json.data;
+    return dados;
   } catch (err) {
-    const foiTimeout = err && err.name === 'AbortError';
-    // Leituras não gravam nada, e criações agora são protegidas contra
-    // duplicidade pelo idRequisicao — as duas podem ser repetidas uma vez
-    // sozinhas antes de incomodar o usuário.
-    if (foiTimeout && (isRead || ehCriacao) && !tentativa) {
-      return api(action, payload, 1);
-    }
-    if (err && err.message && err.message.indexOf('Sessão expirada') === 0 && S.usuario) {
+    // A pessoa já saiu daquela tela: a resposta não interessa mais e quem
+    // estava esperando simplesmente para ali, sem erro e sem mexer na tela nova.
+    if (err.tipo === 'cancelada') return NUNCA();
+    if (err.message && err.message.indexOf('Sessão expirada') === 0 && S.usuario) {
       resetSession();
       render();
       toast('Sua sessão expirou. Entre novamente.', true);
       throw err;
     }
-    const msg = foiTimeout
-      ? 'O servidor demorou muito pra responder. Tente novamente.'
-      : (err.message || 'Erro de conexão com a planilha');
+    if (isRead) ULTIMA_FALHA_LEITURA = Date.now();
+    const msg = err.message || 'Erro de conexão com a planilha';
     toast(msg, true);
     throw new Error(msg);
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -206,6 +342,7 @@ const S = {
 };
 
 function resetSession() {
+  limparMemoLeitura();
   S.unidade = null;
   S.setor = null;
   S.cargo = null;
@@ -613,7 +750,16 @@ function linhaInfo(label, valorHtml) {
 }
 
 function vazio(icone, texto) {
+  // [ESTABILIDADE OUT/2026] Lista "vazia" logo depois de uma falha de
+  // leitura não é lista vazia: é dado que não chegou. Mostra isso e
+  // oferece tentar de novo, em vez de dizer que não há nada.
+  if (Date.now() - ULTIMA_FALHA_LEITURA < 3000) return blocoFalhaCarregar();
   return '<div class="empty"><span class="ic">' + icone + '</span>' + escapeHtml(texto) + '</div>';
+}
+
+function blocoFalhaCarregar() {
+  return '<div class="empty"><span class="ic">📡</span>Não foi possível carregar agora.' +
+    '<div style="margin-top:10px"><button type="button" class="btn btn--outline btn--sm" onclick="render()">↻ Tentar de novo</button></div></div>';
 }
 
 // ------------------------- DOWNLOADS (CSV / PDF) -------------------------
@@ -667,20 +813,19 @@ function nomeArquivo(prefixo, extensao) {
 
 // ------------------------- CACHES DE APOIO -------------------------
 
+// [ESTABILIDADE OUT/2026] A lista de equipamentos não fica mais guardada
+// sem prazo: o status muda quando alguém abre ou finaliza uma manutenção, e
+// a lista velha oferecia no checklist uma máquina que o servidor ia recusar
+// (ou escondia uma que já tinha voltado). Agora vale a memória de 20 s do
+// api(), que é apagada a cada gravação.
 async function carregarEquipamentos(incluirInativos) {
-  const chave = 'equip_' + S.unidade.UNIDADE + '_' + (S.setor || '') + (incluirInativos ? '_todos' : '');
-  if (S.cache[chave]) return S.cache[chave];
-  const lista = await api('getEquipamentos', {
+  return api('getEquipamentos', {
     unidade: S.unidade.UNIDADE,
     incluirInativos: incluirInativos ? true : undefined
   }).catch(function () { return []; });
-  S.cache[chave] = lista;
-  return lista;
 }
 
-function limparCacheEquipamentos() {
-  Object.keys(S.cache).forEach(function (k) { if (k.indexOf('equip_') === 0) delete S.cache[k]; });
-}
+function limparCacheEquipamentos() { limparMemoLeitura(); }
 
 async function carregarTiposEquipamento() {
   if (S.cache.tipos) return S.cache.tipos;
@@ -810,6 +955,11 @@ const TAB_PAI = {
 const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'visaoGeral'];
 
 function render() {
+  // [ESTABILIDADE OUT/2026] Cada troca de tela ganha um número; as leituras
+  // da tela anterior são canceladas (ver cancelarLeiturasDaTelaAnterior).
+  GERACAO_TELA++;
+  cancelarLeiturasDaTelaAnterior();
+  const geracao = GERACAO_TELA;
   app.innerHTML = '';
   if (SCREENS_ADMIN.indexOf(S.screen) > -1 && !ehAdmin()) {
     S.screen = 'painel';
@@ -825,7 +975,20 @@ function render() {
     S.screen = 'visaoGeral';
   }
   const fn = SCREENS[S.screen] || renderLoginUnidade;
-  fn();
+  // Tela que quebrar no meio não fica presa em "Carregando…": mostra o
+  // aviso com o botão de tentar de novo.
+  const telaFalhou = function (err) {
+    console.error('[Central de Frota] Falha ao montar a tela ' + S.screen + ':', err);
+    if (geracao !== GERACAO_TELA) return;
+    app.querySelectorAll('p.subtle').forEach(function (p) {
+      if (/^Carregando/.test(p.textContent)) p.remove();
+    });
+    app.appendChild(el(blocoFalhaCarregar()));
+  };
+  try {
+    const r = fn();
+    if (r && typeof r.then === 'function') r.then(null, telaFalhou);
+  } catch (err) { telaFalhou(err); }
   updateChrome();
 }
 
@@ -1869,6 +2032,13 @@ async function renderManutencoes() {
     '</div>'
   );
   app.appendChild(filtros);
+  // [ESTABILIDADE OUT/2026] Por padrão só os últimos 30 dias, como no
+  // checklist — a lista não fica mais pesada conforme o histórico cresce.
+  // Chamado ainda em aberto aparece sempre, mesmo que seja mais antigo.
+  const periodoWrap = el('<div style="margin-top:8px"></div>');
+  app.appendChild(periodoWrap);
+  const periodo = filtroPeriodo(periodoWrap, { comTodos: true, value: 'mes', onChange: function () { load(); } });
+  app.appendChild(el('<p class="subtle" style="margin-top:6px">Chamados em aberto aparecem sempre, mesmo fora do período.</p>'));
 
   const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando…</p></div>');
   app.appendChild(body);
@@ -1879,8 +2049,10 @@ async function renderManutencoes() {
 
   async function load() {
     body.innerHTML = '<p class="subtle">Carregando…</p>';
+    const per = periodo.getValue();
     const lista = await api('getManutencoes', {
       unidade: S.unidade.UNIDADE,
+      periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim,
       status: document.getElementById('fStatus').value || undefined,
       tipo: document.getElementById('fTipo').value || undefined,
       prioridade: document.getElementById('fPrioridade').value || undefined
