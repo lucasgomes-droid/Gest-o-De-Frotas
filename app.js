@@ -27,9 +27,18 @@ const STATUS_EQUIPAMENTO = {
 };
 
 const STATUS_MANUTENCAO = {
-  aberta:    { label: 'Aberta',      cls: 'aberta' },
-  andamento: { label: 'Em andamento', cls: 'andamento' },
-  concluida: { label: 'Concluída',   cls: 'concluida' }
+  aberta:    { label: 'Aberta',           cls: 'aberta' },
+  acionado:  { label: 'Técnico acionado', cls: 'acionado' },
+  andamento: { label: 'Em andamento',     cls: 'andamento' },
+  concluida: { label: 'Finalizada',       cls: 'concluida' }
+};
+// [OUT/2026] Fluxo do chamado: aberta → técnico acionado → em andamento →
+// finalizada. Quem abre é o Operador; quem move o status é o Administrador.
+const FLUXO_MANUTENCAO = ['aberta', 'acionado', 'andamento', 'concluida'];
+const ACAO_PROXIMO_STATUS = {
+  acionado: '📞 Acionar técnico',
+  andamento: '🔧 Iniciar manutenção',
+  concluida: '✓ Finalizar manutenção'
 };
 
 const PRIORIDADE_MANUTENCAO = {
@@ -808,6 +817,8 @@ function render() {
     S.screen = 'painel';
     toast('Área restrita ao administrador.', true);
   }
+  // [OUT/2026] O Administrador não realiza checklist — só consulta os feitos.
+  if (S.screen === 'checklistNovo' && ehAdmin()) S.screen = 'checklists';
   // Enquanto a unidade ativa for o sentinel "Todas as unidades", só a tela
   // de comparativo é permitida — pra registrar qualquer coisa (checklist,
   // manutenção, lavagem, gás) o gerente troca pra uma unidade específica
@@ -862,7 +873,6 @@ function updateChrome() {
   const tabs = ehAdmin()
     ? [
         { s: 'painel', ic: '📊', label: 'Painel' },
-        { s: 'checklists', ic: '✅', label: 'Checklist' },
         { s: 'manutencoes', ic: '🔧', label: 'Manutenções' },
         { s: 'relatorios', ic: '📈', label: 'Relatórios' },
         { s: 'mais', ic: '☰', label: 'Mais' }
@@ -1196,7 +1206,7 @@ async function renderPainel() {
       kpi(ind.inativos, 'Inativos', 'kpi--inativo') +
       (ehAdmin() ? kpi(resumo.feitos + '/' + resumo.total, 'Checklists hoje') : '') +
       kpi(ind.naoConformidadesAbertas, 'NCs abertas', 'kpi--parado') +
-      kpi(ind.manutencoesAbertas + ind.manutencoesAndamento, 'Manutenções ativas', 'kpi--accent') +
+      kpi(ind.manutencoesAbertas + (ind.manutencoesAcionadas || 0) + ind.manutencoesAndamento, 'Manutenções ativas', 'kpi--accent') +
     '</div>'
   ));
 
@@ -1262,8 +1272,7 @@ async function renderPainel() {
         '</button>'
       );
       item.onclick = function () {
-        if (c.FEITO) go('checklists');
-        else go('checklistNovo', { checklistEquipamentoId: c.ID_EQUIPAMENTO });
+        go('checklists'); // só Admin chega aqui — ele consulta, não realiza
       };
       cardChk.appendChild(item);
     });
@@ -1277,9 +1286,13 @@ async function renderPainel() {
 async function renderChecklists() {
   appendHtml(app, screenHeader('Checklist', 'Checklists da frota', 'Inspeção diária dos equipamentos'));
 
-  const btnNovo = el('<button class="btn btn--primary btn--block">＋ Novo checklist</button>');
-  btnNovo.onclick = function () { go('checklistNovo', { checklistEquipamentoId: null }); };
-  app.appendChild(btnNovo);
+  if (ehAdmin()) {
+    app.appendChild(botaoVoltar('mais'));
+  } else {
+    const btnNovo = el('<button class="btn btn--primary btn--block">＋ Novo checklist</button>');
+    btnNovo.onclick = function () { go('checklistNovo', { checklistEquipamentoId: null }); };
+    app.appendChild(btnNovo);
+  }
 
   const filtros = el(
     '<div class="filters" style="margin-top:12px">' +
@@ -1804,17 +1817,22 @@ async function renderManutencoes() {
   const titulo = ehAdmin() ? 'Manutenções' : 'Abertura de manutenção';
   appendHtml(app, screenHeader(titulo, titulo, 'Corretivas e preventivas da unidade ' + S.unidade.UNIDADE));
 
-  const btnNova = el('<button class="btn btn--primary btn--block">＋ Nova manutenção</button>');
-  btnNova.onclick = function () { go('manutencaoForm', { manutencaoAtual: null }); };
-  app.appendChild(btnNova);
+  // [OUT/2026] Quem abre o chamado é o Operador. O Administrador acompanha
+  // e move o status (técnico acionado → em andamento → finalizada).
+  if (!ehAdmin()) {
+    const btnNova = el('<button class="btn btn--primary btn--block">＋ Nova manutenção</button>');
+    btnNova.onclick = function () { go('manutencaoForm', { manutencaoAtual: null }); };
+    app.appendChild(btnNova);
+  }
 
   const filtros = el(
     '<div class="filters" style="margin-top:12px">' +
       '<select id="fStatus">' +
         '<option value="">Todos os status</option>' +
         '<option value="aberta">Abertas</option>' +
+        '<option value="acionado">Técnico acionado</option>' +
         '<option value="andamento">Em andamento</option>' +
-        '<option value="concluida">Concluídas</option>' +
+        '<option value="concluida">Finalizadas</option>' +
       '</select>' +
       '<select id="fTipo">' +
         '<option value="">Corretivas e preventivas</option>' +
@@ -1851,13 +1869,14 @@ async function renderManutencoes() {
     if (!lista.length) { body.appendChild(el(vazio('🔧', 'Nenhuma manutenção encontrada com esses filtros.'))); return; }
 
     const abertas = lista.filter(function (m) { return m.STATUS === 'aberta'; }).length;
+    const acionadas = lista.filter(function (m) { return m.STATUS === 'acionado'; }).length;
     const andamento = lista.filter(function (m) { return m.STATUS === 'andamento'; }).length;
     const concluidas = lista.filter(function (m) { return m.STATUS === 'concluida'; }).length;
     body.appendChild(el('<div class="kpi-grid">' +
       kpi(abertas, 'Abertas', 'kpi--parado') +
+      kpi(acionadas, 'Técnico acionado', 'kpi--accent') +
       kpi(andamento, 'Em andamento', 'kpi--manut') +
-      kpi(concluidas, 'Concluídas', 'kpi--uso') +
-      kpi(lista.length, 'Total') +
+      kpi(concluidas, 'Finalizadas', 'kpi--uso') +
     '</div>'));
 
     const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
@@ -1868,11 +1887,12 @@ async function renderManutencoes() {
       const atrasada = m.TIPO === 'preventiva' && m.STATUS !== 'concluida' &&
         m.DATA_PREVISTA && parseIso(m.DATA_PREVISTA) < new Date();
       const item = el(
-        '<button type="button" class="list-item ' + (atrasada ? 'is-alert' : m.STATUS === 'andamento' ? 'is-warn' : '') + '" style="width:100%">' +
+        '<button type="button" class="list-item ' + (atrasada || m.STATUS === 'aberta' ? 'is-alert' : m.STATUS !== 'concluida' ? 'is-warn' : '') + '" style="width:100%">' +
           '<span><span class="shiplabel">' + escapeHtml(m.ID_MANUTENCAO) + '</span>' +
           '<div class="list-item__title" style="margin-top:6px">' + escapeHtml(m.TITULO) + '</div>' +
           '<div class="list-item__sub">' + escapeHtml(m.NOME_EQUIPAMENTO) + ' · ' +
-            escapeHtml(m.TIPO === 'preventiva' ? 'Preventiva' : 'Corretiva') + ' · ' + fmtData(m.ABERTA_EM) +
+            escapeHtml(m.TIPO === 'preventiva' ? 'Preventiva' : 'Corretiva') + ' · ' + fmtDataHora(m.ABERTA_EM) +
+            ' · ' + escapeHtml(m.TEMPO_TOTAL_TEXTO || '—') + (m.STATUS === 'concluida' ? ' no total' : ' até agora') +
             (m.TIPO === 'preventiva' && m.DATA_PREVISTA ? ' · prevista ' + fmtData(m.DATA_PREVISTA) : '') + '</div></span>' +
           '<span class="stack" style="gap:4px;align-items:flex-end">' + tagManutencao(m.STATUS) + tagPrioridade(m.PRIORIDADE) + '</span>' +
         '</button>'
@@ -1893,12 +1913,14 @@ const COLUNAS_MANUTENCAO = [
   ['STATUS', 'Status'],
   ['DESCRICAO', 'Descrição'],
   ['DATA_PREVISTA', 'Data prevista', fmtData],
-  ['ABERTA_EM', 'Aberta em', fmtDataHora],
-  ['INICIADA_EM', 'Iniciada em', fmtDataHora],
-  ['CONCLUIDA_EM', 'Concluída em', fmtDataHora],
-  ['TEMPO_ESPERA_TEXTO', 'Tempo aberta aguardando início'],
-  ['TEMPO_EXECUCAO_TEXTO', 'Tempo de execução'],
-  ['TEMPO_TOTAL_TEXTO', 'Tempo total'],
+  ['ABERTA_EM', 'Chamado aberto em', fmtDataHora],
+  ['ACIONADO_EM', 'Técnico acionado em', fmtDataHora],
+  ['INICIADA_EM', 'Início da manutenção', fmtDataHora],
+  ['CONCLUIDA_EM', 'Fim da manutenção', fmtDataHora],
+  ['TEMPO_ACIONAMENTO_TEXTO', 'Abertura até acionamento (expediente)'],
+  ['TEMPO_CHEGADA_TEXTO', 'Acionamento até início (expediente)'],
+  ['TEMPO_EXECUCAO_TEXTO', 'Início até fim (expediente)'],
+  ['TEMPO_TOTAL_TEXTO', 'Total abertura até fim (expediente)'],
   ['UNIDADE', 'Unidade']
 ];
 
@@ -1960,41 +1982,10 @@ async function renderManutencaoForm() {
 
   const desc = textField(card, { label: 'Descrição', multiline: true, value: editando ? m.DESCRICAO : (pre.descricao || '') });
 
-  const selStatus = selectField(card, {
-    label: 'Status', required: true, semVazio: true,
-    value: editando ? m.STATUS : 'aberta',
-    options: [
-      { value: 'aberta', label: 'Aberta' },
-      { value: 'andamento', label: 'Em andamento' },
-      { value: 'concluida', label: 'Concluída' }
-    ]
-  });
-
-  // Datas condicionais: aparecem já preenchidas com "agora" e podem ser
-  // ajustadas à mão — e vão explicitamente no payload.
-  const datasWrap = el('<div class="stack"></div>');
-  card.appendChild(datasWrap);
-  let inicioField = null, fimField = null;
-
-  function montarDatas() {
-    const st = selStatus.getValue();
-    datasWrap.innerHTML = '';
-    inicioField = null; fimField = null;
-    if (st === 'andamento' || st === 'concluida') {
-      inicioField = textField(datasWrap, {
-        label: 'Início da manutenção', type: 'datetime-local',
-        value: paraInputDateTime(editando ? m.INICIADA_EM : null)
-      });
-    }
-    if (st === 'concluida') {
-      fimField = textField(datasWrap, {
-        label: 'Conclusão da manutenção', type: 'datetime-local',
-        value: paraInputDateTime(editando ? m.CONCLUIDA_EM : null)
-      });
-    }
+  if (!editando) {
+    card.appendChild(el('<div class="note">O chamado entra como <strong>Aberta</strong> com a data e hora de agora, ' +
+      'e os responsáveis do setor recebem o e-mail na hora.</div>'));
   }
-  selStatus.select.onchange = montarDatas;
-  montarDatas();
 
   const btn = el('<button class="btn btn--primary btn--block">' + (editando ? '✓ Salvar alterações' : '✓ Abrir manutenção') + '</button>');
   card.appendChild(btn);
@@ -2004,18 +1995,14 @@ async function renderManutencaoForm() {
     if (selTipo.getValue() === 'preventiva' && !dtPrevista.getValue()) {
       toast('Informe a data prevista da preventiva', true); return;
     }
-    const st = selStatus.getValue();
     const payload = {
       idUsuario: S.usuario.ID_USUARIO,
       titulo: tit.getValue(),
       tipo: selTipo.getValue(),
       prioridade: selPrio.getValue(),
       descricao: desc.getValue(),
-      status: st,
       dataPrevista: selTipo.getValue() === 'preventiva' ? dtPrevista.getValue() : ''
     };
-    if (inicioField) payload.iniciadaEm = inputDateTimeParaIso(inicioField.getValue());
-    if (fimField) payload.concluidaEm = inputDateTimeParaIso(fimField.getValue());
 
     btn.disabled = true; btn.textContent = 'Salvando…';
     try {
@@ -2048,86 +2035,121 @@ function renderManutencaoDetalhe() {
     linhaInfo('Status', tagManutencao(m.STATUS)) +
     linhaInfo('Tipo', escapeHtml(m.TIPO === 'preventiva' ? 'Preventiva' : 'Corretiva')) +
     linhaInfo('Prioridade', tagPrioridade(m.PRIORIDADE)) +
-    linhaInfo('Equipamento', '<strong>' + escapeHtml(m.NOME_EQUIPAMENTO) + '</strong>') +
-    (m.DATA_PREVISTA ? linhaInfo('Data prevista', fmtData(m.DATA_PREVISTA)) : '') +
-    linhaInfo('Aberta em', fmtDataHora(m.ABERTA_EM)) +
-    (m.INICIADA_EM ? linhaInfo('Iniciada em', fmtDataHora(m.INICIADA_EM)) : '') +
-    (m.CONCLUIDA_EM ? linhaInfo('Concluída em', fmtDataHora(m.CONCLUIDA_EM)) : '')
-  );
-  card.appendChild(el('<div class="divider"></div>'));
-  appendHtml(card,
-    linhaInfo('Tempo aberta aguardando início', '<strong class="mono">' + escapeHtml(m.TEMPO_ESPERA_TEXTO || '—') + '</strong>') +
-    linhaInfo('Tempo de execução', '<strong class="mono">' + escapeHtml(m.TEMPO_EXECUCAO_TEXTO || '—') + '</strong>') +
-    linhaInfo(m.STATUS === 'concluida' ? 'Tempo total (abertura → conclusão)' : 'Tempo total até agora',
-      '<strong class="mono">' + escapeHtml(m.TEMPO_TOTAL_TEXTO || '—') + '</strong>')
+    linhaInfo('Frota', '<strong>' + escapeHtml(m.NOME_EQUIPAMENTO) + '</strong>') +
+    (m.DATA_PREVISTA ? linhaInfo('Data prevista', fmtData(m.DATA_PREVISTA)) : '')
   );
   if (m.DESCRICAO) {
     card.appendChild(el('<div class="stack" style="gap:4px"><span class="subtle">Descrição</span>' +
       '<p style="font-size:14px">' + escapeHtml(m.DESCRICAO) + '</p></div>'));
   }
+  if (ehAdmin()) {
+    const btnEditar = el('<button class="btn btn--outline btn--block">✎ Editar dados da manutenção</button>');
+    btnEditar.onclick = function () { go('manutencaoForm', { manutencaoAtual: m }); };
+    card.appendChild(btnEditar);
+  }
 
-  const btnEditar = el('<button class="btn btn--outline btn--block">✎ Editar dados da manutenção</button>');
-  btnEditar.onclick = function () { go('manutencaoForm', { manutencaoAtual: m }); };
-  card.appendChild(btnEditar);
+  // ---- Linha do tempo do chamado ----
+  const emCurso = m.ETAPA_EM_CURSO || '';
+  function passo(numero, titulo, data, tempoRotulo, tempoTexto, etapaAnterior) {
+    const feito = !!data;
+    const correndo = !feito && emCurso === etapaAnterior;
+    return '<div class="list-item ' + (feito ? 'is-ok' : correndo ? 'is-warn' : '') + '" style="cursor:default">' +
+      '<span><span class="list-item__title">' + numero + '. ' + titulo + '</span>' +
+      '<div class="list-item__sub">' + (feito ? fmtDataHora(data) : correndo ? 'Aguardando…' : '—') +
+      (tempoRotulo && tempoTexto && tempoTexto !== '—'
+        ? ' · ' + tempoRotulo + ': <strong>' + escapeHtml(tempoTexto) + '</strong>' + (correndo ? ' até agora' : '') : '') +
+      '</div></span>' +
+      '<span class="tag ' + (feito ? 'tag--ok' : 'tag--na') + '">' + (feito ? 'Feito' : correndo ? 'Em espera' : 'Pendente') + '</span>' +
+    '</div>';
+  }
+  const linha = el('<div class="card stack"><h3 class="title-lg">🕒 Linha do tempo</h3></div>');
+  app.appendChild(linha);
+  appendHtml(linha,
+    passo(1, 'Chamado aberto', m.ABERTA_EM) +
+    passo(2, 'Técnico acionado', m.ACIONADO_EM, 'desde a abertura', m.TEMPO_ACIONAMENTO_TEXTO, 'aberta') +
+    passo(3, 'Início da manutenção', m.INICIADA_EM, 'desde o acionamento', m.TEMPO_CHEGADA_TEXTO, 'acionado') +
+    passo(4, 'Fim da manutenção', m.CONCLUIDA_EM, 'duração do serviço', m.TEMPO_EXECUCAO_TEXTO, 'andamento')
+  );
+  linha.appendChild(el('<div class="divider"></div>'));
+  appendHtml(linha,
+    linhaInfo('Abertura → técnico acionado', '<strong class="mono">' + escapeHtml(m.TEMPO_ACIONAMENTO_TEXTO || '—') + '</strong>') +
+    linhaInfo('Técnico acionado → início', '<strong class="mono">' + escapeHtml(m.TEMPO_CHEGADA_TEXTO || '—') + '</strong>') +
+    linhaInfo('Início → fim', '<strong class="mono">' + escapeHtml(m.TEMPO_EXECUCAO_TEXTO || '—') + '</strong>') +
+    linhaInfo(m.STATUS === 'concluida' ? 'Total (abertura → fim)' : 'Total até agora',
+      '<strong class="mono">' + escapeHtml(m.TEMPO_TOTAL_TEXTO || '—') + '</strong>')
+  );
+  linha.appendChild(el('<div class="note">Os tempos contam só o expediente: segunda a sexta, das 07:30 às 02:30. ' +
+    'Madrugada e fim de semana não entram.</div>'));
 
-  // ---- Mudança rápida de status, com as datas condicionais do fluxo ----
+  // ---- Mudança de status: só o Administrador ----
+  if (!ehAdmin()) return;
+
   const acoes = el('<div class="card stack"><h3 class="title-lg">Atualizar status</h3></div>');
   app.appendChild(acoes);
-
-  const grid = el('<div class="option-grid" style="grid-template-columns:repeat(3,1fr)"></div>');
-  acoes.appendChild(grid);
   const areaDatas = el('<div class="stack" hidden></div>');
+
+  function abrirConfirmacao(st) {
+    const info = STATUS_MANUTENCAO[st];
+    areaDatas.hidden = false;
+    areaDatas.innerHTML = '';
+    let campoAcionado = null, campoInicio = null, campoFim = null;
+    if (st === 'acionado') {
+      campoAcionado = textField(areaDatas, { label: 'Data e hora em que o técnico foi acionado', type: 'datetime-local',
+        value: paraInputDateTime(m.ACIONADO_EM) });
+    }
+    if (st === 'andamento' || st === 'concluida') {
+      campoInicio = textField(areaDatas, { label: 'Data e hora de início da manutenção', type: 'datetime-local',
+        value: paraInputDateTime(m.INICIADA_EM) });
+    }
+    if (st === 'concluida') {
+      campoFim = textField(areaDatas, { label: 'Data e hora do fim da manutenção', type: 'datetime-local',
+        value: paraInputDateTime(m.CONCLUIDA_EM) });
+    }
+    if (FLUXO_MANUTENCAO.indexOf(st) < FLUXO_MANUTENCAO.indexOf(m.STATUS)) {
+      areaDatas.appendChild(el('<div class="note warn">Voltar o status apaga as datas das etapas seguintes já registradas.</div>'));
+    }
+    areaDatas.appendChild(el('<div class="note">A data e a hora vêm preenchidas com o momento atual — ajuste se aconteceu em outro horário. ' +
+      'Ao confirmar, os responsáveis do setor recebem o e-mail com a linha do tempo.</div>'));
+    const confirmar = el('<button class="btn btn--primary btn--block">Confirmar → ' + info.label + '</button>');
+    areaDatas.appendChild(confirmar);
+    confirmar.onclick = async function () {
+      confirmar.disabled = true; confirmar.textContent = 'Salvando…';
+      const payload = { idManutencao: m.ID_MANUTENCAO, idUsuario: S.usuario.ID_USUARIO, status: st };
+      if (campoAcionado) payload.acionadoEm = inputDateTimeParaIso(campoAcionado.getValue());
+      if (campoInicio) payload.iniciadaEm = inputDateTimeParaIso(campoInicio.getValue());
+      if (campoFim) payload.concluidaEm = inputDateTimeParaIso(campoFim.getValue());
+      try {
+        const atualizada = await api('updateManutencao', payload);
+        toast('Status atualizado para "' + info.label + '".', false, true);
+        go('manutencaoDetalhe', { manutencaoAtual: atualizada });
+      } catch (e) {
+        confirmar.disabled = false; confirmar.textContent = 'Confirmar → ' + info.label;
+      }
+    };
+  }
+
+  // Botão grande do próximo passo do fluxo.
+  const proximo = FLUXO_MANUTENCAO[FLUXO_MANUTENCAO.indexOf(m.STATUS) + 1];
+  if (proximo) {
+    const btnProx = el('<button class="btn btn--primary btn--block">' + ACAO_PROXIMO_STATUS[proximo] + '</button>');
+    btnProx.onclick = function () { abrirConfirmacao(proximo); };
+    acoes.appendChild(btnProx);
+  } else {
+    acoes.appendChild(el('<p class="subtle">Chamado finalizado.</p>'));
+  }
   acoes.appendChild(areaDatas);
 
-  ['aberta', 'andamento', 'concluida'].forEach(function (st) {
-    const info = STATUS_MANUTENCAO[st];
-    const btn = el('<button type="button" class="option-btn"' + (st === m.STATUS ? ' disabled' : '') + '>' + info.label + '</button>');
-    if (st === m.STATUS) { btn.classList.add('is-selected'); grid.appendChild(btn); return; }
-    btn.onclick = function () {
-      grid.querySelectorAll('.option-btn').forEach(function (b) { if (!b.disabled) b.classList.remove('is-selected'); });
-      btn.classList.add('is-selected');
-      areaDatas.hidden = false;
-      areaDatas.innerHTML = '';
-
-      let campoInicio = null, campoFim = null;
-      if (st === 'andamento' || st === 'concluida') {
-        campoInicio = textField(areaDatas, {
-          label: 'Data e hora de início', type: 'datetime-local',
-          value: paraInputDateTime(m.INICIADA_EM)
-        });
-      }
-      if (st === 'concluida') {
-        campoFim = textField(areaDatas, {
-          label: 'Data e hora de conclusão', type: 'datetime-local',
-          value: paraInputDateTime(m.CONCLUIDA_EM)
-        });
-      }
-      if (st === 'aberta') {
-        areaDatas.appendChild(el('<div class="note warn">Voltar para "Aberta" limpa as datas de início e conclusão já registradas.</div>'));
-      }
-
-      const confirmar = el('<button class="btn btn--primary btn--block">Confirmar → ' + info.label + '</button>');
-      areaDatas.appendChild(confirmar);
-      confirmar.onclick = async function () {
-        confirmar.disabled = true; confirmar.textContent = 'Salvando…';
-        const payload = { idManutencao: m.ID_MANUTENCAO, idUsuario: S.usuario.ID_USUARIO, status: st };
-        if (campoInicio) payload.iniciadaEm = inputDateTimeParaIso(campoInicio.getValue());
-        if (campoFim) payload.concluidaEm = inputDateTimeParaIso(campoFim.getValue());
-        try {
-          const atualizada = await api('updateManutencao', payload);
-          toast('Status atualizado para "' + info.label + '".', false, true);
-          go('manutencaoDetalhe', { manutencaoAtual: atualizada });
-        } catch (e) {
-          confirmar.disabled = false; confirmar.textContent = 'Confirmar → ' + info.label;
-        }
-      };
-    };
-    grid.appendChild(btn);
+  // Correção: ir para qualquer outro status (pular etapa ou voltar).
+  const outros = el('<details><summary class="subtle" style="cursor:pointer">Corrigir: mudar para outro status</summary></details>');
+  const grid = el('<div class="option-grid" style="grid-template-columns:repeat(2,1fr);margin-top:8px"></div>');
+  outros.appendChild(grid);
+  FLUXO_MANUTENCAO.forEach(function (st) {
+    const b = el('<button type="button" class="option-btn"' + (st === m.STATUS ? ' disabled' : '') + '>' + STATUS_MANUTENCAO[st].label + '</button>');
+    if (st === m.STATUS) b.classList.add('is-selected');
+    else b.onclick = function () { abrirConfirmacao(st); };
+    grid.appendChild(b);
   });
-
-  const dica = el('<div class="note">Ao marcar "Em andamento" ou "Concluída", a data/hora vem preenchida com o momento atual — ' +
-    'ajuste se a manutenção começou ou terminou em outro horário.</div>');
-  acoes.appendChild(dica);
+  acoes.appendChild(outros);
 }
 
 // ------------------------- PREVENTIVAS -------------------------
@@ -2138,10 +2160,11 @@ async function renderPreventivas() {
   const filtros = el(
     '<div class="filters">' +
       '<select id="fStatus">' +
-        '<option value="">Pendentes e concluídas</option>' +
+        '<option value="">Pendentes e finalizadas</option>' +
         '<option value="aberta">Abertas</option>' +
+        '<option value="acionado">Técnico acionado</option>' +
         '<option value="andamento">Em andamento</option>' +
-        '<option value="concluida">Concluídas</option>' +
+        '<option value="concluida">Finalizadas</option>' +
       '</select>' +
     '</div>'
   );
@@ -2725,18 +2748,63 @@ function montarRelatorio(body, r, filtroAtual) {
 
   // ---- Impacto: horas sem máquina x horas em operação, no período ----
   const imp = r.impacto || {};
-  const cardImpacto = el('<div class="card stack"><h3 class="title-lg">⏱️ Impacto no período</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Horas acumuladas de toda a frota, calculadas a partir do histórico de status ' +
-    '— só cobre mudanças de status registradas a partir de 17/09/2026 em diante.</p></div>');
+  const pctTxt = function (v) { return v === null || v === undefined ? '—' : String(v).replace('.', ',') + '%'; };
+  const cardImpacto = el('<div class="card stack"><h3 class="title-lg">⏱️ Horas da frota no período</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Soma de todas as máquinas, contando só o expediente (' +
+    escapeHtml(imp.expediente || 'seg a sex, 07:30 às 02:30') + '). Calculado pelo histórico de status de cada equipamento, ' +
+    'registrado a partir de 17/09/2026.</p></div>');
   body.appendChild(cardImpacto);
   cardImpacto.appendChild(el(
     '<div class="kpi-grid">' +
-      kpi(imp.indisponibilidadeTexto || '0min', 'Sem máquina (manut. + parado)', 'kpi--parado') +
-      kpi(imp.manutencaoTexto || '0min', 'Só manutenção', 'kpi--manut') +
-      kpi(imp.paradoTexto || '0min', 'Só parado', 'kpi--parado') +
       kpi(imp.operacaoTexto || '0min', 'Em operação', 'kpi--uso') +
+      kpi(imp.manutencaoTexto || '0min', 'Em manutenção', 'kpi--manut') +
+      kpi(imp.paradoTexto || '0min', 'Parado', 'kpi--parado') +
+      kpi(imp.indisponibilidadeTexto || '0min', 'Sem máquina (manut. + parado)', 'kpi--parado') +
     '</div>'
   ));
+  cardImpacto.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(pctTxt(imp.disponibilidadePct), 'Disponibilidade da frota', 'kpi--uso') +
+      kpi(pctTxt(imp.impactoPct), 'Impacto (expediente perdido)', 'kpi--parado') +
+    '</div>'
+  ));
+
+  // ---- Tempo médio de cada etapa do chamado ----
+  const tm = r.temposMedios || {};
+  const cardTempos = el('<div class="card stack"><h3 class="title-lg">🕒 Tempo médio por etapa do chamado</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Média dos ' + (tm.finalizadas || 0) + ' chamado(s) finalizado(s) no período, em horas de expediente</p></div>');
+  body.appendChild(cardTempos);
+  cardTempos.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(tm.acionamentoTexto || '—', 'Abertura → técnico acionado', 'kpi--parado') +
+      kpi(tm.chegadaTexto || '—', 'Acionado → início', 'kpi--accent') +
+      kpi(tm.execucaoTexto || '—', 'Início → fim', 'kpi--manut') +
+      kpi(tm.totalTexto || '—', 'Total do chamado', 'kpi--uso') +
+    '</div>'
+  ));
+
+  // ---- Horas por máquina ----
+  const hpm = (r.horasPorMaquina || []).slice();
+  const cardHpm = el('<div class="card stack"><h3 class="title-lg">🚜 Horas por máquina</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Expediente de cada máquina no período: em operação, em manutenção e parada</p></div>');
+  body.appendChild(cardHpm);
+  if (!hpm.length) {
+    cardHpm.appendChild(el('<p class="subtle">Nenhum equipamento ativo neste setor.</p>'));
+  } else {
+    cardHpm.appendChild(tabelaHtml([
+      ['nomeEquipamento', 'Máquina'], ['emUsoTexto', 'Em operação'], ['manutencaoTexto', 'Em manutenção'],
+      ['paradoTexto', 'Parada'], ['disponibilidadePct', 'Disponibilidade', pctTxt]
+    ], hpm));
+    const btnCsvH = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
+    btnCsvH.onclick = function () {
+      downloadCSV(nomeArquivo('horas_por_maquina', 'csv'), [
+        ['nomeEquipamento', 'Máquina'], ['codigo', 'Código'], ['tipo', 'Tipo'],
+        ['emUsoTexto', 'Em operação'], ['manutencaoTexto', 'Em manutenção'], ['paradoTexto', 'Parada'],
+        ['indisponibilidadeTexto', 'Sem máquina'], ['disponibilidadePct', 'Disponibilidade (%)']
+      ], hpm);
+    };
+    cardHpm.appendChild(btnCsvH);
+  }
 
   // ---- Gráficos em painel escuro (CSS puro, sem biblioteca) ----
   body.appendChild(painelGrafico('Manutenções por status', 'Quantidade de manutenções em cada etapa no período',
@@ -2746,7 +2814,7 @@ function montarRelatorio(body, r, filtroAtual) {
 
   // ---- Ranking de tempo em manutenção ----
   const cardRank = el('<div class="card stack"><h3 class="title-lg">🏭 Máquinas com mais tempo em manutenção</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Tempo acumulado dentro do período selecionado</p></div>');
+    '<p class="subtle" style="margin-top:-6px">Horas de expediente, da abertura ao fim de cada chamado, dentro do período</p></div>');
   body.appendChild(cardRank);
   if (!r.rankingTempoManutencao.length) {
     cardRank.appendChild(el('<p class="subtle">Nenhuma manutenção com tempo apurado no período.</p>'));
@@ -3281,6 +3349,7 @@ function renderMais() {
     screenHeader('Mais', 'Administração', 'Cadastros e acompanhamento de ' + unidadeSetorLabel()) +
     '<div class="stack" id="maisLista">' +
       menuCard('🚜', 'Equipamentos', 'Cadastrar, editar status e excluir', 'equipamentos') +
+      menuCard('✅', 'Checklists realizados', 'Consultar os checklists feitos pelos operadores', 'checklists') +
       menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
       menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +

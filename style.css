@@ -279,6 +279,7 @@ input,select,textarea{font-family:inherit;font-size:16px}
 .tag--parado{background:#fdeceb;color:var(--st-parado)}
 .tag--inativo{background:#eef0f1;color:var(--st-inativo)}
 .tag--aberta{background:#fdeceb;color:var(--st-aberta)}
+.tag--acionado{background:#e3eefc;color:#1f5aa8}
 .tag--andamento{background:#fdf1de;color:#8a5a10}
 .tag--concluida{background:#e6f6ed;color:var(--st-concluida)}
 .tag--ok{background:#e6f6ed;color:#146b39}
