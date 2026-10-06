@@ -1228,6 +1228,27 @@ async function renderPainel() {
     });
   }
 
+  // ---- [OUT/2026] Máquinas paradas agora ----
+  const paradas = d.equipamentosParados || [];
+  const cardParadas = el('<div class="card stack"><h3 class="title-lg">🔴 Máquinas paradas agora</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Situação atual do setor</p></div>');
+  body.appendChild(cardParadas);
+  if (!paradas.length) {
+    cardParadas.appendChild(el('<p class="subtle">Nenhuma máquina parada neste momento.</p>'));
+  } else {
+    paradas.forEach(function (e) {
+      cardParadas.appendChild(el(
+        '<div class="list-item is-alert" style="cursor:default">' +
+          '<span><span class="list-item__title">' + escapeHtml(e.NOME) + '</span>' +
+          '<div class="list-item__sub">' + escapeHtml(e.TIPO || e.CODIGO || '') +
+          ' · parado desde ' + fmtDataHora(e.STATUS_DESDE) +
+          (e.OBSERVACOES ? ' · ' + escapeHtml(e.OBSERVACOES) : '') + '</div></span>' +
+          '<span class="tag tag--parado">' + escapeHtml(e.TEMPO_TEXTO) + '</span>' +
+        '</div>'
+      ));
+    });
+  }
+
   // ---- Preventivas próximas (30 dias) ----
   const cardPrev = el('<div class="card stack"><h3 class="title-lg">🗓️ Preventivas próximas</h3>' +
     '<p class="subtle" style="margin-top:-6px">Previstas para os próximos 30 dias</p></div>');
