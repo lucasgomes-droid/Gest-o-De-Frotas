@@ -3674,7 +3674,7 @@ function renderMais() {
       '</div>'
     );
     bindMenuCards();
-    document.getElementById('maisLista').appendChild(cartaoTrocarSetor());
+    if (!S.usuario.SETOR) document.getElementById('maisLista').appendChild(cartaoTrocarSetor()); // usuário preso a um setor não troca
     return;
   }
   appendHtml(app,
@@ -3689,7 +3689,7 @@ function renderMais() {
     '</div>'
   );
   bindMenuCards();
-  document.getElementById('maisLista').appendChild(cartaoTrocarSetor());
+  if (!S.usuario.SETOR) document.getElementById('maisLista').appendChild(cartaoTrocarSetor());
 }
 
 // ------------------------- CONFIGURAÇÕES (ADMIN) -------------------------
@@ -3759,7 +3759,7 @@ async function renderConfiguracoes() {
   const cardUsers = el('<div class="card stack"><h3 class="title-lg">Usuários da unidade</h3>' +
     '<div class="note">Usuários e unidades são cadastrados direto na planilha do Google Sheets, ' +
     'nas abas <strong>CONFIG_USUARIOS</strong> e <strong>CONFIG_UNIDADES</strong> — é lá que ficam o tipo ' +
-    '(ADMIN/OPERADOR), a senha do admin e o campo ATIVO. Esta tela só mostra o que está cadastrado.</div>' +
+    '(ADMIN/OPERADOR), a senha do admin, o campo ATIVO e o SETOR (FABRICA, OPERACAO ou em branco para os dois). Esta tela só mostra o que está cadastrado.</div>' +
     '<p class="subtle">Carregando usuários…</p></div>');
   app.appendChild(cardUsers);
 
@@ -3772,7 +3772,7 @@ async function renderConfiguracoes() {
       cardUsers.appendChild(el(
         '<div class="list-item" style="cursor:default">' +
           '<span><span class="list-item__title">' + escapeHtml(u.NOME) + '</span>' +
-          '<div class="list-item__sub">' + escapeHtml(u.USUARIO || '') + ' · ' + escapeHtml(u.UNIDADE) + '</div></span>' +
+          '<div class="list-item__sub">' + escapeHtml(u.USUARIO || '') + ' · ' + escapeHtml(u.UNIDADE) + ' · ' + (u.SETOR ? escapeHtml(setorLabel(u.SETOR)) : 'Fábrica e Operação') + '</div></span>' +
           '<span class="tag ' + (u.TIPO === 'ADMIN' ? 'tag--info' : 'tag--na') + '">' + escapeHtml(u.TIPO) + '</span>' +
         '</div>'
       ));
