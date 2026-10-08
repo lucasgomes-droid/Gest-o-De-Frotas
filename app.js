@@ -1265,7 +1265,7 @@ async function renderVisaoGeralUnidades() {
   app.appendChild(topo);
   topo.appendChild(el('<h3 class="title-lg" style="font-size:15px">📄 Relatório de todas as unidades</h3>' +
     '<p class="subtle" style="margin-top:-6px">Manutenção + Lavagem + Troca de gás de todas as unidades, num PDF só</p>'));
-  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes', onChange: function () { carregarExecutivoGestao(); } });
+  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'mes', onChange: function () { carregarComparativo(); carregarExecutivoGestao(); } });
   const btnPdf = el('<button class="btn btn--accent btn--block">📄 Emitir relatório de todas as unidades</button>');
   topo.appendChild(btnPdf);
   btnPdf.onclick = async function () {
@@ -1303,14 +1303,145 @@ async function renderVisaoGeralUnidades() {
     montarFrotasExecutivo(exec, r.frotas);
   }
 
+  // Comparativo de gás e manutenção entre as unidades, no período do filtro.
+  const comp = el('<div class="stack" style="margin-top:2px"></div>');
+  async function carregarComparativo() {
+    comp.innerHTML = '<p class="subtle">Carregando comparativo de gás e manutenção…</p>';
+    const p = periodo.getValue();
+    const r = await api('getComparativoUnidades', { periodo: p.periodo, dataInicio: p.dataInicio, dataFim: p.dataFim })
+      .catch(function () { return null; });
+    comp.innerHTML = '';
+    if (!r) { comp.appendChild(el(blocoFalhaCarregar())); return; }
+    montarComparativoUnidades(comp, r);
+  }
+
   try {
     const d = await api('getVisaoGeralUnidades', {});
     montarVisaoGeralUnidades(body, d);
   } catch (e) {
     body.innerHTML = '<p class="subtle">Não foi possível carregar o comparativo das unidades.</p>';
   }
+  app.appendChild(comp);
+  carregarComparativo();
   app.appendChild(exec);
   carregarExecutivoGestao();
+}
+
+// Comparativo entre as unidades (gás + manutenção) no período do filtro.
+function montarComparativoUnidades(box, d) {
+  const us = d.unidades || [];
+  const tg = d.total.gas, tm = d.total.manutencao;
+  const horas = function (v) { return v ? String(v).replace('.', ',') + 'h' : '—'; };
+  const dinheiro = function (v) { return v ? fmtMoeda(v) : '—'; };
+  const porHora = function (v) { return v ? fmtMoeda(v) + '/h' : '—'; };
+  const destaque = function (o, fmt) { return o ? escapeHtml(o.nome) + '<br><span class="subtle">' + escapeHtml(fmt(o.valor)) + '</span>' : '—'; };
+  const maquina = function (o) {
+    return o ? escapeHtml(o.nome) + '<br><span class="subtle">' + escapeHtml(o.texto) + ' · ' + o.quantidade + ' chamado(s)</span>' : '—';
+  };
+
+  box.appendChild(el('<h3 class="title-lg" style="margin-top:6px">⛽ Comparativo das unidades — gás e manutenção</h3>'));
+  box.appendChild(el('<p class="subtle" style="margin-top:-6px">' + escapeHtml(d.periodo.label) + ' · ' + escapeHtml(setorLabel(S.setor)) + '</p>'));
+
+  box.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(tg.totalTrocas, 'Trocas de gás') +
+      kpi(fmtMoeda(tg.custoTotal), 'Custo total de gás', 'kpi--accent') +
+      kpi(horas(tg.horaMedia), 'Horas médias entre trocas') +
+      kpi(porHora(tg.custoMedioPorHora), 'Custo médio por hora') +
+    '</div>'
+  ));
+
+  if (!tg.totalTrocas && !tm.total) {
+    box.appendChild(el('<div class="card"><p class="subtle">Nenhuma troca de gás nem manutenção neste período. ' +
+      'Troque o período acima para ver o histórico.</p></div>'));
+    return;
+  }
+
+  // Barras: uma linha por unidade, para comparar de relance.
+  function barras(titulo, subtitulo, valor, texto) {
+    const card = el('<div class="card stack"><h3 class="title-lg">' + titulo + '</h3>' +
+      '<p class="subtle" style="margin-top:-6px">' + escapeHtml(subtitulo) + '</p></div>');
+    const max = Math.max.apply(null, us.map(function (u) { return Number(valor(u)) || 0; }).concat([0]));
+    us.forEach(function (u) {
+      const v = Number(valor(u)) || 0;
+      card.appendChild(el(
+        '<div class="bar-row"><span class="label">' + escapeHtml(u.UNIDADE) + '</span>' +
+        '<div class="bar-track">' + (v > 0 ? '<div class="bar-fill" style="width:' + Math.max(4, (v / (max || 1)) * 100) + '%"></div>' : '') + '</div>' +
+        '<span class="bar-val" style="width:auto;min-width:92px">' + escapeHtml(texto(u)) + '</span></div>'
+      ));
+    });
+    box.appendChild(card);
+  }
+  barras('💰 Custo de gás por unidade', 'Total gasto no período e número de trocas',
+    function (u) { return u.gas.custoTotal; },
+    function (u) { return fmtMoeda(u.gas.custoTotal) + ' · ' + u.gas.totalTrocas + 'x'; });
+  barras('📈 Custo por hora de uso', 'Custo do gás ÷ horas rodadas — quanto menor, melhor',
+    function (u) { return u.gas.custoMedioPorHora; },
+    function (u) { return porHora(u.gas.custoMedioPorHora); });
+  barras('🕐 Horas médias entre trocas', 'Quanto tempo o gás dura em cada unidade — quanto maior, melhor',
+    function (u) { return u.gas.horaMedia; },
+    function (u) { return horas(u.gas.horaMedia); });
+  barras('🔧 Manutenções por unidade', 'Chamados abertos no período e tempo em manutenção',
+    function (u) { return u.manutencao.total; },
+    function (u) { return u.manutencao.total + ' · ' + u.manutencao.tempoTotalTexto; });
+
+  // Fornecedores de cada unidade.
+  const cardForn = el('<div class="card stack"><h3 class="title-lg">⛽ Fornecedor por unidade</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Quanto cada unidade gastou com cada fornecedor</p></div>');
+  const maxForn = Math.max.apply(null, us.reduce(function (acc, u) {
+    return acc.concat(u.gas.fornecedores.map(function (f) { return f.custo; }));
+  }, [0]));
+  us.forEach(function (u) {
+    if (!u.gas.fornecedores.length) {
+      cardForn.appendChild(el('<div class="bar-row"><span class="label">' + escapeHtml(u.UNIDADE) + '</span>' +
+        '<span class="subtle">sem trocas no período</span></div>'));
+    }
+    u.gas.fornecedores.forEach(function (f) {
+      cardForn.appendChild(el(
+        '<div class="bar-row"><span class="label" style="width:150px">' + escapeHtml(u.UNIDADE) + ' · ' + escapeHtml(f.nome) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, (f.custo / (maxForn || 1)) * 100) + '%"></div></div>' +
+        '<span class="bar-val" style="width:auto;min-width:92px">' + escapeHtml(fmtMoeda(f.custo)) + ' · ' + f.trocas + 'x</span></div>'
+      ));
+    });
+  });
+  box.appendChild(cardForn);
+
+  // Tabela lado a lado: uma coluna por unidade + o total.
+  const linhas = [
+    ['Trocas de gás', function (g) { return g.totalTrocas; }, 'gas'],
+    ['Custo total de gás', function (g) { return dinheiro(g.custoTotal); }, 'gas'],
+    ['Custo médio por troca', function (g) { return dinheiro(g.custoMedioPorTroca); }, 'gas'],
+    ['Gás trocado (kg)', function (g) { return g.trocasComKg ? String(g.kgTotal).replace('.', ',') + ' kg' : 'não informado'; }, 'gas'],
+    ['Horas de uso somadas', function (g) { return horas(g.horasTotal); }, 'gas'],
+    ['Horas médias entre trocas', function (g) { return horas(g.horaMedia); }, 'gas'],
+    ['Custo médio por hora', function (g) { return porHora(g.custoMedioPorHora); }, 'gas'],
+    ['Frota com maior custo', function (g) { return destaque(g.maiorCusto, fmtMoeda); }, 'gas', true],
+    ['Frota com mais horas de uso', function (g) { return destaque(g.maisHoras, horas); }, 'gas', true],
+    ['Maior custo por hora', function (g) { return destaque(g.maiorCustoPorHora, porHora); }, 'gas', true],
+    ['Menor custo por hora', function (g) { return destaque(g.menorCustoPorHora, porHora); }, 'gas', true],
+    ['Maior tempo entre trocas', function (g) { return destaque(g.maiorIntervalo, horas); }, 'gas', true],
+    ['Menor tempo entre trocas', function (g) { return destaque(g.menorIntervalo, horas); }, 'gas', true],
+    ['Manutenções no período', function (m) { return m.total + (m.ativas ? ' (' + m.ativas + ' em aberto)' : ''); }, 'manutencao'],
+    ['Tempo total em manutenção', function (m) { return m.total ? m.tempoTotalTexto : '—'; }, 'manutencao'],
+    ['Mais tempo em manutenção', function (m) { return maquina(m.maiorTempo); }, 'manutencao', true],
+    ['Menos tempo em manutenção', function (m) { return maquina(m.menorTempo); }, 'manutencao', true]
+  ];
+  const cardTab = el('<div class="card stack"><h3 class="title-lg">📋 Lado a lado</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Todos os números, uma coluna por unidade. Tempo de manutenção conta só o expediente.</p></div>');
+  let html = '<table class="report-table"><thead><tr><th>Indicador</th>' +
+    us.map(function (u) { return '<th>' + escapeHtml(u.UNIDADE) + '</th>'; }).join('') + '<th>Todas</th></tr></thead><tbody>';
+  linhas.forEach(function (l) {
+    html += '<tr><td><strong>' + escapeHtml(l[0]) + '</strong></td>' +
+      us.concat([d.total]).map(function (u) {
+        const v = l[1](u[l[2]]);
+        return '<td>' + (l[3] ? v : escapeHtml(v)) + '</td>'; // l[3]: célula já vem montada (e escapada)
+      }).join('') + '</tr>';
+  });
+  html += '</tbody></table>';
+  const scroll = el('<div class="table-scroll"></div>');
+  scroll.innerHTML = html;
+  cardTab.appendChild(scroll);
+  box.appendChild(cardTab);
 }
 
 function montarVisaoGeralUnidades(body, d) {
@@ -3438,23 +3569,16 @@ function montarRelatorioGas(body, r, recarregar) {
     (r.rankingIntervaloMedioPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: i.horasMedia + 'h' }); }),
     function (item) { return item.quantidade + ' troca(s)'; });
 
-  // ---- Tabela detalhada ----
-  const cardTabela = el('<div class="card stack"><h3 class="title-lg">Trocas do período</h3></div>');
-  body.appendChild(cardTabela);
-  if (!r.trocas.length) {
-    cardTabela.appendChild(el('<p class="subtle">Nenhuma troca de gás no período selecionado.</p>'));
-  } else {
-    const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
+  // A tabela "Trocas do período" saiu desta tela (o CSV continua
+  // disponível no botão abaixo). Fica só a exclusão de troca lançada por
+  // engano — restrita ao Administrador.
+  if (r.trocas.length) {
+    const cardDados = el('<div class="card stack"><h3 class="title-lg">Dados do período</h3></div>');
+    body.appendChild(cardDados);
+    const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar trocas em CSV</button>');
     btnCsv.onclick = function () { downloadCSV(nomeArquivo('trocas_gas', 'csv'), COLUNAS_TROCA_GAS, r.trocas); };
-    cardTabela.appendChild(btnCsv);
-    const scroll = el('<div class="table-scroll"></div>');
-    scroll.appendChild(tabelaHtml(COLUNAS_TROCA_GAS, r.trocas.slice(0, 30)));
-    cardTabela.appendChild(scroll);
-    if (r.trocas.length > 30) {
-      cardTabela.appendChild(el('<p class="subtle">Mostrando os 30 primeiros de ' + r.trocas.length + ' registro(s). O CSV traz tudo.</p>'));
-    }
+    cardDados.appendChild(btnCsv);
 
-    // Exclusão de troca lançada por engano — só Administrador.
     if (ehAdmin() && recarregar) {
       const boxExcluir = el(
         '<div class="stack" style="gap:8px;padding-top:12px;border-top:1px solid var(--line)">' +
@@ -3483,7 +3607,7 @@ function montarRelatorioGas(body, r, recarregar) {
           btnExcluirTroca.disabled = false; btnExcluirTroca.textContent = '🗑 Excluir troca de gás';
         }
       };
-      cardTabela.appendChild(boxExcluir);
+      cardDados.appendChild(boxExcluir);
     }
   }
 }
