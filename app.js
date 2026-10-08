@@ -942,6 +942,7 @@ const SCREENS = {
   relatorioGas: renderRelatorioGas,
   relatorioExecutivo: renderRelatorioExecutivo,
   configuracoes: renderConfiguracoes,
+  perguntas: renderPerguntas,
   mais: renderMais
 };
 
@@ -954,13 +955,14 @@ const TAB_PAI = {
   equipamentoForm: 'equipamentos',
   equipamentos: 'mais',
   naoConformidades: 'mais',
-  configuracoes: 'mais'
+  configuracoes: 'mais',
+  perguntas: 'mais'
 };
 
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
 // "mais" NÃO entra aqui: o Operador também acessa (Preventivas/Histórico),
 // só que com um conteúdo diferente — ver renderMais().
-const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'visaoGeral'];
+const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'visaoGeral'];
 
 function render() {
   // [ESTABILIDADE OUT/2026] Cada troca de tela ganha um número; as leituras
@@ -1501,6 +1503,132 @@ function montarVisaoGeralUnidades(body, d) {
 // O mesmo limite existe no Code.gs (LIMITE_HORAS_ENTRE_TROCAS).
 const LIMITE_HORAS_ENTRE_TROCAS = 25;
 
+// ------------------------- PERGUNTAS (CHECKLIST / LAVAGEM) -------------------------
+// O Administrador escolhe o formulário (checklist ou lavagem) e o TIPO de
+// equipamento, e adiciona, altera ou exclui perguntas. Vale para todas as
+// unidades: é por tipo de equipamento, não por frota.
+async function renderPerguntas() {
+  appendHtml(app, screenHeader('Perguntas', 'Perguntas do checklist e da lavagem',
+    'Por tipo de equipamento — vale para todas as unidades'));
+  app.appendChild(botaoVoltar('mais'));
+
+  const card = el('<div class="card stack"><p class="subtle">Carregando…</p></div>');
+  app.appendChild(card);
+
+  // Tipos: os padrões do app + qualquer tipo que já exista nos equipamentos.
+  const res = await Promise.all([carregarTiposEquipamento(), carregarEquipamentos(true)]);
+  const tipos = [];
+  (res[0] || []).concat((res[1] || []).map(function (e) { return e.TIPO; })).forEach(function (t) {
+    const nome = String(t || '').trim();
+    if (nome && nome !== 'Outro' && tipos.map(function (x) { return x.toLowerCase(); }).indexOf(nome.toLowerCase()) === -1) tipos.push(nome);
+  });
+
+  card.innerHTML = '';
+  const selModulo = selectField(card, {
+    label: 'Formulário', required: true, value: S.perguntasModulo || 'checklist',
+    options: [{ value: 'checklist', label: 'Checklist' }, { value: 'lavagem', label: 'Lavagem' }]
+  });
+  const selTipo = selectField(card, {
+    label: 'Tipo de equipamento', required: true, value: S.perguntasTipo || tipos[0] || '',
+    options: tipos.map(function (t) { return { value: t, label: t }; })
+  });
+  if (!selModulo.getValue()) selModulo.setValue('checklist');
+  if (!selTipo.getValue() && tipos.length) selTipo.setValue(tipos[0]);
+
+  const lista = el('<div class="stack" style="gap:8px"></div>');
+  card.appendChild(lista);
+
+  const form = el('<div class="card stack"></div>');
+  app.appendChild(form);
+  const tituloForm = el('<h3 class="title-lg">＋ Adicionar pergunta</h3>');
+  form.appendChild(tituloForm);
+  const campoItem = textField(form, { label: 'Pergunta (nome do item)', required: true, placeholder: 'Ex: Garfos e corrente' });
+  const campoInstrucao = textField(form, { label: 'Instrução para o operador', multiline: true, placeholder: 'Explique o que conferir neste item.' });
+  const btnSalvar = el('<button class="btn btn--primary btn--block">＋ Adicionar pergunta</button>');
+  const btnCancelar = el('<button class="btn btn--outline btn--block" hidden>Cancelar alteração</button>');
+  form.appendChild(btnSalvar); form.appendChild(btnCancelar);
+
+  let emEdicao = null; // pergunta sendo alterada (ou null = adicionando)
+  function limparForm() {
+    emEdicao = null;
+    campoItem.setValue(''); campoInstrucao.setValue('');
+    tituloForm.textContent = '＋ Adicionar pergunta';
+    btnSalvar.textContent = '＋ Adicionar pergunta';
+    btnCancelar.hidden = true;
+  }
+  btnCancelar.onclick = limparForm;
+
+  async function carregar() {
+    S.perguntasModulo = selModulo.getValue(); S.perguntasTipo = selTipo.getValue();
+    limparForm();
+    if (!selTipo.getValue()) { lista.innerHTML = '<p class="subtle">Nenhum tipo de equipamento cadastrado.</p>'; return; }
+    lista.innerHTML = '<p class="subtle">Carregando perguntas…</p>';
+    const modulo = selModulo.getValue(), tipo = selTipo.getValue();
+    const r = await api('getPerguntas', { modulo: modulo, tipo: tipo }).catch(function () { return null; });
+    if (modulo !== selModulo.getValue() || tipo !== selTipo.getValue()) return;
+    lista.innerHTML = '';
+    if (!r) { lista.appendChild(el('<p class="subtle">Não foi possível carregar as perguntas.</p>')); return; }
+    lista.appendChild(el('<div class="note' + (r.personalizado ? '' : ' warn') + '">' + (r.personalizado
+      ? 'Este tipo tem perguntas próprias (' + r.itens.length + ').'
+      : 'Este tipo ainda usa a lista padrão. Ao adicionar, alterar ou excluir uma pergunta, ele passa a ter a lista própria.') + '</div>'));
+    r.itens.forEach(function (q, i) {
+      const linha = el(
+        '<div class="list-item" style="cursor:default;align-items:flex-start">' +
+          '<span><span class="list-item__title">' + (i + 1) + '. ' + escapeHtml(q.item) + '</span>' +
+          '<div class="list-item__sub" style="white-space:normal">' + escapeHtml(q.instrucao || 'Sem instrução.') + '</div></span>' +
+          '<span class="row" style="gap:6px;flex-shrink:0"></span>' +
+        '</div>'
+      );
+      const acoes = linha.lastChild;
+      const bAlt = el('<button type="button" class="btn btn--outline btn--sm">Alterar</button>');
+      const bExc = el('<button type="button" class="btn btn--danger btn--sm">Excluir</button>');
+      acoes.appendChild(bAlt); acoes.appendChild(bExc);
+      bAlt.onclick = function () {
+        emEdicao = q;
+        campoItem.setValue(q.item); campoInstrucao.setValue(q.instrucao || '');
+        tituloForm.textContent = 'Alterar pergunta ' + (i + 1);
+        btnSalvar.textContent = '✓ Salvar alteração';
+        btnCancelar.hidden = false;
+        form.scrollIntoView({ block: 'center' });
+        campoItem.input.focus();
+      };
+      bExc.onclick = async function () {
+        if (!window.confirm('Excluir a pergunta "' + q.item + '" de ' + tipo + '?\n\nChecklists e lavagens já feitos não mudam.')) return;
+        bExc.disabled = true; bExc.textContent = 'Excluindo…';
+        try {
+          await api('deletePergunta', { modulo: modulo, tipo: tipo, idPergunta: q.idPergunta || undefined, itemOriginal: q.item, idUsuario: S.usuario.ID_USUARIO });
+          toast('Pergunta excluída.', false, true);
+          carregar();
+        } catch (e) { bExc.disabled = false; bExc.textContent = 'Excluir'; }
+      };
+      lista.appendChild(linha);
+    });
+  }
+  selModulo.select.addEventListener('change', carregar);
+  selTipo.select.addEventListener('change', carregar);
+
+  btnSalvar.onclick = async function () {
+    if (!selTipo.getValue()) { toast('Selecione o tipo de equipamento', true); return; }
+    if (!campoItem.getValue()) { toast('Escreva a pergunta', true); return; }
+    const rotulo = btnSalvar.textContent;
+    btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando…';
+    try {
+      await api('savePergunta', {
+        modulo: selModulo.getValue(), tipo: selTipo.getValue(),
+        idPergunta: emEdicao && emEdicao.idPergunta ? emEdicao.idPergunta : undefined,
+        itemOriginal: emEdicao ? emEdicao.item : undefined,
+        item: campoItem.getValue(), instrucao: campoInstrucao.getValue(),
+        idUsuario: S.usuario.ID_USUARIO
+      });
+      toast(emEdicao ? 'Pergunta alterada.' : 'Pergunta adicionada.', false, true);
+      btnSalvar.disabled = false;
+      carregar();
+    } catch (e) { btnSalvar.disabled = false; btnSalvar.textContent = rotulo; }
+  };
+
+  carregar();
+}
+
 // ------------------------- ESCALA DE LAVAGEM -------------------------
 // Uma máquina por dia útil (seg a sex), em rodízio: todas as máquinas da
 // unidade/setor passam pela lavagem antes de alguma repetir. A ordem do
@@ -1535,45 +1663,68 @@ function maquinaDaLavagem(rodizio, data) {
   return rodizio[((i % rodizio.length) + rodizio.length) % rodizio.length];
 }
 
+// Data do dia útil de número `i` (inverso de indiceDiaUtil).
+function dataDoIndiceDiaUtil(i) {
+  const semanas = Math.floor(i / 5), resto = ((i % 5) + 5) % 5;
+  return new Date(2026, 0, 5 + semanas * 7 + resto);
+}
+
 async function montarLavagemDoDia(card) {
   const geracao = GERACAO_TELA;
   const res = await Promise.all([
     carregarEquipamentos(false),
-    api('getLavagens', { unidade: S.unidade.UNIDADE, periodo: 'semana' }).catch(function () { return []; })
+    // 30 dias: o suficiente para enxergar uma lavagem adiantada dentro do rodízio.
+    api('getLavagens', { unidade: S.unidade.UNIDADE, periodo: 'mes' }).catch(function () { return []; })
   ]);
   if (geracao !== GERACAO_TELA || !card.isConnected) return; // já saiu do Painel
   const rodizio = ordemRodizioLavagem(res[0] || []);
   const lavagens = res[1] || [];
   card.innerHTML = '<h3 class="title-lg">🧽 Lavagem do dia</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Uma máquina por dia, de segunda a sexta, em rodízio</p>';
+    '<p class="subtle" style="margin-top:-6px">Uma máquina por dia, de segunda a sexta, em rodízio. ' +
+    'Se a máquina foi lavada antes do dia dela, já aparece como lavada.</p>';
   if (!rodizio.length) {
     card.appendChild(el('<p class="subtle">Nenhum equipamento cadastrado neste setor.</p>'));
     return;
   }
 
   const hoje = new Date();
+  const fimDeHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate(), 23, 59, 59);
   const mesmoDia = function (a, b) {
     return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
   };
-  const lavadaEm = function (equip, dia) {
-    return lavagens.some(function (l) {
+  const ddmm = function (d) { return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0'); };
+  // Lavagem que "vale" para a vez da máquina no dia `dia`: a mais recente
+  // feita depois da vez anterior dela no rodízio e até o próprio dia. Assim
+  // quem lavou adiantado não precisa lavar de novo — e a ordem não muda.
+  const lavagemDaVez = function (equip, dia) {
+    const i = indiceDiaUtil(dia);
+    if (i === null) return null;
+    const vezAnterior = dataDoIndiceDiaUtil(i - rodizio.length);
+    const depoisDe = new Date(vezAnterior.getFullYear(), vezAnterior.getMonth(), vezAnterior.getDate(), 23, 59, 59);
+    const ate = new Date(dia.getFullYear(), dia.getMonth(), dia.getDate(), 23, 59, 59);
+    let achada = null;
+    lavagens.forEach(function (l) {
       const d = new Date(l.DATA_HORA);
-      return String(l.ID_EQUIPAMENTO) === String(equip.ID_EQUIPAMENTO) && !isNaN(d) && mesmoDia(d, dia);
+      if (String(l.ID_EQUIPAMENTO) !== String(equip.ID_EQUIPAMENTO) || isNaN(d)) return;
+      if (d > depoisDe && d <= ate && d <= fimDeHoje && (!achada || d > achada)) achada = d;
     });
+    return achada;
   };
 
   const doDia = maquinaDaLavagem(rodizio, hoje);
   if (!doDia) {
     card.appendChild(el('<div class="note">Hoje não tem lavagem — a escala é de segunda a sexta.</div>'));
   } else {
-    const feita = lavadaEm(doDia, hoje);
+    const quando = lavagemDaVez(doDia, hoje);
+    const adiantada = quando && !mesmoDia(quando, hoje);
     const item = el(
-      '<button type="button" class="list-item ' + (feita ? 'is-ok' : 'is-warn') + '" style="width:100%">' +
+      '<button type="button" class="list-item ' + (quando ? 'is-ok' : 'is-warn') + '" style="width:100%">' +
         '<span><span class="list-item__title">' + escapeHtml(doDia.NOME) + '</span>' +
         '<div class="list-item__sub">' + escapeHtml(doDia.CODIGO || doDia.TIPO || '') +
         (doDia.STATUS !== 'em_uso' ? ' · ' + escapeHtml((STATUS_EQUIPAMENTO[doDia.STATUS] || {}).label || doDia.STATUS) : '') +
-        (feita ? ' · lavagem já registrada hoje' : ' · toque para registrar a lavagem') + '</div></span>' +
-        '<span class="tag ' + (feita ? 'tag--ok' : 'tag--nok') + '">' + (feita ? 'Feita' : 'Hoje') + '</span>' +
+        (adiantada ? ' · já foi lavada no dia ' + ddmm(quando) + ', não precisa lavar hoje'
+          : quando ? ' · lavagem já registrada hoje' : ' · toque para registrar a lavagem') + '</div></span>' +
+        '<span class="tag ' + (quando ? 'tag--ok' : 'tag--nok') + '">' + (adiantada ? 'Lavada ' + ddmm(quando) : quando ? 'Feita' : 'Hoje') + '</span>' +
       '</button>'
     );
     item.onclick = function () { go('lavagemForm'); };
@@ -1591,12 +1742,11 @@ async function montarLavagemDoDia(card) {
     const m = maquinaDaLavagem(rodizio, dia);
     const ehHoje = mesmoDia(dia, hoje);
     const passou = !ehHoje && dia < hoje;
-    const feita = lavadaEm(m, dia);
+    const quando = lavagemDaVez(m, dia);
     card.appendChild(el(
       '<div class="row between" style="gap:10px;font-size:13.5px;padding:6px 0;border-bottom:1px solid var(--line)' + (ehHoje ? ';font-weight:700' : '') + '">' +
-        '<span><span class="mono" style="color:var(--ink-soft)">' + DIAS_SEMANA_CURTO[dia.getDay()] + ' ' +
-          String(dia.getDate()).padStart(2, '0') + '/' + String(dia.getMonth() + 1).padStart(2, '0') + '</span> · ' + escapeHtml(m.NOME) + '</span>' +
-        '<span class="subtle">' + (feita ? '✓ feita' : ehHoje ? 'hoje' : passou ? 'não registrada' : '') + '</span>' +
+        '<span><span class="mono" style="color:var(--ink-soft)">' + DIAS_SEMANA_CURTO[dia.getDay()] + ' ' + ddmm(dia) + '</span> · ' + escapeHtml(m.NOME) + '</span>' +
+        '<span class="subtle">' + (quando ? '✓ lavada ' + ddmm(quando) : ehHoje ? 'hoje' : passou ? 'não registrada' : '') + '</span>' +
       '</div>'
     ));
   }
@@ -1831,7 +1981,7 @@ async function renderChecklists() {
 
 async function renderChecklistNovo() {
   appendHtml(app, screenHeader('Novo checklist', 'Checklist do equipamento',
-    'Responda os 7 itens. Item NOK abre uma não conformidade automaticamente.'));
+    'Responda todos os itens. Item NOK abre uma não conformidade automaticamente.'));
   app.appendChild(botaoVoltar('checklists'));
 
   const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
@@ -1874,9 +2024,17 @@ async function renderChecklistNovo() {
   card.appendChild(el('<div class="divider"></div>'));
   card.appendChild(el('<h3 class="title-lg">Itens de verificação</h3>'));
 
-  const refs = modelo.map(function (m, indice) {
+  // As perguntas dependem do TIPO do equipamento (empilhadeira, lavadora,
+  // paleteira…) — o administrador ajusta em Mais › Perguntas. Tipo sem
+  // perguntas próprias usa a lista padrão.
+  const itensWrap = el('<div class="stack"></div>');
+  card.appendChild(itensWrap);
+  let refs = [];
+  function montarItens(lista) {
+    itensWrap.innerHTML = '';
+    refs = lista.map(function (m, indice) {
     const box = el('<div class="stack" style="padding-bottom:12px;border-bottom:1px solid var(--line)"></div>');
-    card.appendChild(box);
+    itensWrap.appendChild(box);
     box.appendChild(el('<strong style="font-size:15px">' + (indice + 1) + '. ' + escapeHtml(m.item) + '</strong>'));
     box.appendChild(el('<p class="subtle" style="margin-top:-6px">' + escapeHtml(m.instrucao) + '</p>'));
 
@@ -1928,12 +2086,32 @@ async function renderChecklistNovo() {
       }
     };
   });
+  }
+  let tipoCarregado = null;
+  async function carregarItensDoEquipamento() {
+    const equip = equipamentos.find(function (x) { return String(x.ID_EQUIPAMENTO) === String(selEquip.getValue()); });
+    if (!equip) {
+      tipoCarregado = null; refs = [];
+      itensWrap.innerHTML = '<p class="subtle">Selecione o equipamento para ver os itens.</p>';
+      return;
+    }
+    const tipo = String(equip.TIPO || '');
+    if (tipo === tipoCarregado) return; // mesmo tipo: mantém o que já foi respondido
+    tipoCarregado = tipo; refs = [];
+    itensWrap.innerHTML = '<p class="subtle">Carregando itens…</p>';
+    const lista = await api('getChecklistItensModelo', { tipo: tipo }).catch(function () { return null; });
+    if (tipoCarregado !== tipo) return; // trocou de equipamento no meio
+    montarItens(lista && lista.length ? lista : modelo);
+  }
+  selEquip.select.addEventListener('change', carregarItensDoEquipamento);
+  carregarItensDoEquipamento();
 
   const btn = el('<button class="btn btn--primary btn--block" style="margin-top:6px">✓ Concluir checklist</button>');
   card.appendChild(btn);
   btn.onclick = async function () {
     if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
     if (!fotoEquip.getValue()) { toast('A foto do equipamento é obrigatória', true); return; }
+    if (!refs.length) { toast('Aguarde os itens carregarem', true); return; }
     const itens = [];
     for (const r of refs) {
       const erro = r.validar();
@@ -2104,9 +2282,17 @@ async function renderLavagemForm() {
   card.appendChild(el('<div class="divider"></div>'));
   card.appendChild(el('<h3 class="title-lg">Itens da lavagem</h3>'));
 
-  const refs = modelo.map(function (m, indice) {
+  // As perguntas dependem do TIPO do equipamento (empilhadeira, lavadora,
+  // paleteira…) — o administrador ajusta em Mais › Perguntas. Tipo sem
+  // perguntas próprias usa a lista padrão.
+  const itensWrap = el('<div class="stack"></div>');
+  card.appendChild(itensWrap);
+  let refs = [];
+  function montarItens(lista) {
+    itensWrap.innerHTML = '';
+    refs = lista.map(function (m, indice) {
     const box = el('<div class="stack" style="padding-bottom:12px;border-bottom:1px solid var(--line)"></div>');
-    card.appendChild(box);
+    itensWrap.appendChild(box);
     box.appendChild(el('<strong style="font-size:15px">' + (indice + 1) + '. ' + escapeHtml(m.item) + '</strong>'));
     box.appendChild(el('<p class="subtle" style="margin-top:-6px">' + escapeHtml(m.instrucao) + '</p>'));
 
@@ -2152,6 +2338,25 @@ async function renderLavagemForm() {
       }
     };
   });
+  }
+  let tipoCarregado = null;
+  async function carregarItensDoEquipamento() {
+    const equip = equipamentos.find(function (x) { return String(x.ID_EQUIPAMENTO) === String(selEquip.getValue()); });
+    if (!equip) {
+      tipoCarregado = null; refs = [];
+      itensWrap.innerHTML = '<p class="subtle">Selecione o equipamento para ver os itens.</p>';
+      return;
+    }
+    const tipo = String(equip.TIPO || '');
+    if (tipo === tipoCarregado) return; // mesmo tipo: mantém o que já foi respondido
+    tipoCarregado = tipo; refs = [];
+    itensWrap.innerHTML = '<p class="subtle">Carregando itens…</p>';
+    const lista = await api('getLavagemItensModelo', { tipo: tipo }).catch(function () { return null; });
+    if (tipoCarregado !== tipo) return; // trocou de equipamento no meio
+    montarItens(lista && lista.length ? lista : modelo);
+  }
+  selEquip.select.addEventListener('change', carregarItensDoEquipamento);
+  carregarItensDoEquipamento();
 
   const btn = el('<button class="btn btn--primary btn--block" style="margin-top:6px">✓ Concluir lavagem</button>');
   card.appendChild(btn);
@@ -2159,6 +2364,7 @@ async function renderLavagemForm() {
     if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
     if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
     if (!fotoEquip.getValue()) { toast('A foto do equipamento é obrigatória', true); return; }
+    if (!refs.length) { toast('Aguarde os itens carregarem', true); return; }
     const itens = [];
     for (const r of refs) {
       const erro = r.validar();
@@ -4105,6 +4311,7 @@ function renderMais() {
       menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
       menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
+      menuCard('📝', 'Perguntas', 'Perguntas do checklist e da lavagem, por tipo de equipamento', 'perguntas') +
       menuCard('⚙️', 'Configurações', 'Responsáveis do checklist, usuários e unidades', 'configuracoes') +
     '</div>'
   );
