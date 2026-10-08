@@ -1496,6 +1496,112 @@ function montarVisaoGeralUnidades(body, d) {
   body.appendChild(el('<p class="subtle" style="text-align:center">Atualizado em ' + fmtDataHora(d.geradoEm) + '</p>'));
 }
 
+// Troca de gás: acima deste número de horas entre uma troca e a seguinte
+// da mesma frota, o app pede para conferir o horímetro antes de salvar.
+// O mesmo limite existe no Code.gs (LIMITE_HORAS_ENTRE_TROCAS).
+const LIMITE_HORAS_ENTRE_TROCAS = 25;
+
+// ------------------------- ESCALA DE LAVAGEM -------------------------
+// Uma máquina por dia útil (seg a sex), em rodízio: todas as máquinas da
+// unidade/setor passam pela lavagem antes de alguma repetir. A ordem do
+// rodízio é embaralhada, mas fixa — a mesma em qualquer celular e sem
+// gravar nada na planilha. Vale igual para todas as unidades.
+const DIAS_SEMANA_CURTO = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function ordemRodizioLavagem(equipamentos) {
+  const embaralho = function (texto) { // número fixo a partir do ID
+    let h = 2166136261;
+    for (let i = 0; i < texto.length; i++) { h ^= texto.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  };
+  return equipamentos
+    .filter(function (e) { return e.STATUS !== 'inativo'; })
+    .map(function (e) { return { e: e, h: embaralho(String(e.ID_EQUIPAMENTO)) }; })
+    .sort(function (a, b) { return a.h - b.h || String(a.e.ID_EQUIPAMENTO).localeCompare(String(b.e.ID_EQUIPAMENTO)); })
+    .map(function (x) { return x.e; });
+}
+
+// Número do dia útil (seg a sex) contado desde segunda 05/01/2026; null no fim de semana.
+function indiceDiaUtil(data) {
+  const dias = Math.round((Date.UTC(data.getFullYear(), data.getMonth(), data.getDate()) - Date.UTC(2026, 0, 5)) / 86400000);
+  const naSemana = ((dias % 7) + 7) % 7; // 0 = segunda … 6 = domingo
+  if (naSemana > 4) return null;
+  return Math.floor(dias / 7) * 5 + naSemana;
+}
+
+function maquinaDaLavagem(rodizio, data) {
+  const i = indiceDiaUtil(data);
+  if (i === null || !rodizio.length) return null;
+  return rodizio[((i % rodizio.length) + rodizio.length) % rodizio.length];
+}
+
+async function montarLavagemDoDia(card) {
+  const geracao = GERACAO_TELA;
+  const res = await Promise.all([
+    carregarEquipamentos(false),
+    api('getLavagens', { unidade: S.unidade.UNIDADE, periodo: 'semana' }).catch(function () { return []; })
+  ]);
+  if (geracao !== GERACAO_TELA || !card.isConnected) return; // já saiu do Painel
+  const rodizio = ordemRodizioLavagem(res[0] || []);
+  const lavagens = res[1] || [];
+  card.innerHTML = '<h3 class="title-lg">🧽 Lavagem do dia</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Uma máquina por dia, de segunda a sexta, em rodízio</p>';
+  if (!rodizio.length) {
+    card.appendChild(el('<p class="subtle">Nenhum equipamento cadastrado neste setor.</p>'));
+    return;
+  }
+
+  const hoje = new Date();
+  const mesmoDia = function (a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  };
+  const lavadaEm = function (equip, dia) {
+    return lavagens.some(function (l) {
+      const d = new Date(l.DATA_HORA);
+      return String(l.ID_EQUIPAMENTO) === String(equip.ID_EQUIPAMENTO) && !isNaN(d) && mesmoDia(d, dia);
+    });
+  };
+
+  const doDia = maquinaDaLavagem(rodizio, hoje);
+  if (!doDia) {
+    card.appendChild(el('<div class="note">Hoje não tem lavagem — a escala é de segunda a sexta.</div>'));
+  } else {
+    const feita = lavadaEm(doDia, hoje);
+    const item = el(
+      '<button type="button" class="list-item ' + (feita ? 'is-ok' : 'is-warn') + '" style="width:100%">' +
+        '<span><span class="list-item__title">' + escapeHtml(doDia.NOME) + '</span>' +
+        '<div class="list-item__sub">' + escapeHtml(doDia.CODIGO || doDia.TIPO || '') +
+        (doDia.STATUS !== 'em_uso' ? ' · ' + escapeHtml((STATUS_EQUIPAMENTO[doDia.STATUS] || {}).label || doDia.STATUS) : '') +
+        (feita ? ' · lavagem já registrada hoje' : ' · toque para registrar a lavagem') + '</div></span>' +
+        '<span class="tag ' + (feita ? 'tag--ok' : 'tag--nok') + '">' + (feita ? 'Feita' : 'Hoje') + '</span>' +
+      '</button>'
+    );
+    item.onclick = function () { go('lavagemForm'); };
+    card.appendChild(item);
+  }
+
+  // Escala da semana (a atual; no fim de semana, a próxima).
+  const segunda = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+  const dow = segunda.getDay(); // 0 = domingo
+  segunda.setDate(segunda.getDate() + (dow === 0 ? 1 : dow === 6 ? 2 : 1 - dow));
+  card.appendChild(el('<strong style="font-size:13px;color:var(--ink-soft)">' +
+    (dow === 0 || dow === 6 ? 'Escala da próxima semana' : 'Escala da semana') + '</strong>'));
+  for (let i = 0; i < 5; i++) {
+    const dia = new Date(segunda.getFullYear(), segunda.getMonth(), segunda.getDate() + i);
+    const m = maquinaDaLavagem(rodizio, dia);
+    const ehHoje = mesmoDia(dia, hoje);
+    const passou = !ehHoje && dia < hoje;
+    const feita = lavadaEm(m, dia);
+    card.appendChild(el(
+      '<div class="row between" style="gap:10px;font-size:13.5px;padding:6px 0;border-bottom:1px solid var(--line)' + (ehHoje ? ';font-weight:700' : '') + '">' +
+        '<span><span class="mono" style="color:var(--ink-soft)">' + DIAS_SEMANA_CURTO[dia.getDay()] + ' ' +
+          String(dia.getDate()).padStart(2, '0') + '/' + String(dia.getMonth() + 1).padStart(2, '0') + '</span> · ' + escapeHtml(m.NOME) + '</span>' +
+        '<span class="subtle">' + (feita ? '✓ feita' : ehHoje ? 'hoje' : passou ? 'não registrada' : '') + '</span>' +
+      '</div>'
+    ));
+  }
+}
+
 // ------------------------- PAINEL -------------------------
 
 async function renderPainel() {
@@ -1574,6 +1680,14 @@ async function renderPainel() {
       ));
     });
   }
+
+  // ---- Lavagem do dia (escala seg a sex) ----
+  // Aparece para Operador e Admin: qual máquina é lavada hoje e a escala
+  // da semana. Carrega à parte, sem segurar o resto do Painel.
+  const cardLavagem = el('<div class="card stack"><h3 class="title-lg">🧽 Lavagem do dia</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Carregando escala…</p></div>');
+  body.appendChild(cardLavagem);
+  montarLavagemDoDia(cardLavagem);
 
   // ---- Preventivas próximas (30 dias) ----
   const cardPrev = el('<div class="card stack"><h3 class="title-lg">🗓️ Preventivas próximas</h3>' +
@@ -2163,13 +2277,81 @@ async function renderTrocaGasForm() {
   }
   await carregarFornecedores();
 
+  // ---- Conferência do horímetro ----
+  // Mostra o horímetro da última troca da frota e as horas calculadas. Se
+  // passar de LIMITE_HORAS_ENTRE_TROCAS, pede confirmação antes de salvar
+  // (o operador pode corrigir ou confirmar que está certo).
+  const infoHoras = el('<p class="subtle" style="margin-top:-4px"></p>');
+  horimetro.node.appendChild(infoHoras);
+  let ultimaTroca = null;      // última troca da frota escolhida (ou null)
+  let ultimaTrocaDe = '';      // de qual frota é o valor acima
+  function horasCalculadas() {
+    if (!ultimaTroca || ultimaTrocaDe !== selEquip.getValue() || !horimetro.getValue()) return null;
+    const ant = Number(ultimaTroca.HORIMETRO), atual = Number(horimetro.getValue());
+    if (isNaN(ant) || isNaN(atual)) return null;
+    return Math.round((atual - ant) * 100) / 100;
+  }
+  function atualizarInfoHoras() {
+    if (!selEquip.getValue()) { infoHoras.textContent = ''; return; }
+    if (ultimaTrocaDe !== selEquip.getValue()) { infoHoras.textContent = 'Buscando a última troca desta frota…'; return; }
+    if (!ultimaTroca) { infoHoras.textContent = 'Primeira troca registrada desta frota — não há horímetro anterior para comparar.'; return; }
+    const h = horasCalculadas();
+    let texto = 'Última troca: horímetro ' + ultimaTroca.HORIMETRO + ' em ' + fmtData(ultimaTroca.DATA_HORA) + '.';
+    if (h !== null) {
+      texto += ' Horas desde a última troca: ' + String(h).replace('.', ',') + 'h' +
+        (h > LIMITE_HORAS_ENTRE_TROCAS ? ' — acima de ' + LIMITE_HORAS_ENTRE_TROCAS + 'h, confira o horímetro.' : '.');
+    }
+    infoHoras.textContent = texto;
+    infoHoras.style.color = (h !== null && (h > LIMITE_HORAS_ENTRE_TROCAS || h < 0)) ? 'var(--st-risco)' : '';
+  }
+  async function buscarUltimaTroca() {
+    const id = selEquip.getValue();
+    ultimaTroca = null; ultimaTrocaDe = '';
+    fecharAvisoHoras();
+    atualizarInfoHoras();
+    if (!id) return;
+    const lista = await api('getTrocasGas', { unidade: S.unidade.UNIDADE, idEquipamento: id }).catch(function () { return null; });
+    if (selEquip.getValue() !== id) return; // trocou de frota no meio
+    if (lista === null) { infoHoras.textContent = ''; return; } // sem resposta: o servidor confere ao salvar
+    ultimaTroca = lista.length ? lista[0] : null; // o servidor devolve a mais recente primeiro
+    ultimaTrocaDe = id;
+    atualizarInfoHoras();
+  }
+  selEquip.select.addEventListener('change', buscarUltimaTroca);
+  horimetro.input.addEventListener('input', function () { fecharAvisoHoras(); atualizarInfoHoras(); });
+
+  const avisoHoras = el('<div class="note warn stack" style="gap:10px;display:none"></div>');
+  card.appendChild(avisoHoras);
+  function fecharAvisoHoras() { avisoHoras.style.display = 'none'; avisoHoras.innerHTML = ''; }
+  function pedirConfirmacaoHoras(mensagem) {
+    avisoHoras.innerHTML = '';
+    avisoHoras.appendChild(el('<div><strong>⚠️ Verifique o horímetro</strong><br>' + escapeHtml(mensagem) + '</div>'));
+    const linha = el('<div class="row" style="gap:8px;flex-wrap:wrap"></div>');
+    const btnCorrigir = el('<button type="button" class="btn btn--outline btn--sm">Corrigir horímetro</button>');
+    const btnCerto = el('<button type="button" class="btn btn--primary btn--sm">Está certo, salvar</button>');
+    btnCorrigir.onclick = function () { fecharAvisoHoras(); horimetro.input.focus(); horimetro.input.select(); };
+    btnCerto.onclick = function () { fecharAvisoHoras(); enviar(true); };
+    linha.appendChild(btnCorrigir); linha.appendChild(btnCerto);
+    avisoHoras.appendChild(linha);
+    avisoHoras.style.display = '';
+    avisoHoras.scrollIntoView({ block: 'center' });
+  }
+
   const btn = el('<button class="btn btn--primary btn--block" style="margin-top:6px">✓ Registrar troca de gás</button>');
   card.appendChild(btn);
-  btn.onclick = async function () {
+  btn.onclick = function () { enviar(false); };
+
+  async function enviar(horasConfirmadas) {
     if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
     if (!selEquip.getValue()) { toast('Selecione a frota', true); return; }
     if (!horimetro.getValue()) { toast('Informe o horímetro', true); return; }
     if (!selFornecedor || !selFornecedor.getValue()) { toast('Selecione o fornecedor', true); return; }
+    const horas = horasCalculadas();
+    if (!horasConfirmadas && horas !== null && horas > LIMITE_HORAS_ENTRE_TROCAS) {
+      pedirConfirmacaoHoras('Está dando ' + String(horas).replace('.', ',') + ' horas desde a última troca desta frota, acima das ' +
+        LIMITE_HORAS_ENTRE_TROCAS + 'h esperadas. Horímetro anterior: ' + ultimaTroca.HORIMETRO + ' · informado agora: ' + horimetro.getValue() + '.');
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Enviando…';
     try {
       const res = await api('createTrocaGas', {
@@ -2179,7 +2361,8 @@ async function renderTrocaGasForm() {
         responsavel: selResp.getValue(),
         horimetro: horimetro.getValue(),
         fornecedor: selFornecedor.getValue(),
-        quantidadeKg: kg.getValue()
+        quantidadeKg: kg.getValue(),
+        confirmarHorasAltas: horasConfirmadas ? true : undefined
       });
       let msg = 'Troca de gás ' + res.idTrocaGas + ' registrada! Custo: R$ ' + Number(res.custo).toFixed(2).replace('.', ',');
       if (res.horasOperacao !== null && res.horasOperacao !== undefined) {
@@ -2189,8 +2372,13 @@ async function renderTrocaGasForm() {
       go('painel');
     } catch (e) {
       btn.disabled = false; btn.textContent = '✓ Registrar troca de gás';
+      // O servidor também confere as horas (caso o app não tenha conseguido
+      // buscar a última troca): mostra a mesma confirmação.
+      if (!horasConfirmadas && e && e.message && e.message.indexOf('Verifique o horímetro') === 0) {
+        pedirConfirmacaoHoras(e.message.replace(/^Verifique o horímetro:?\s*/, ''));
+      }
     }
-  };
+  }
 }
 
 // ------------------------- MANUTENÇÕES -------------------------
