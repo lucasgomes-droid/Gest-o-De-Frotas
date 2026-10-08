@@ -1565,15 +1565,16 @@ async function renderChecklistNovo() {
   const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
   app.appendChild(card);
 
-  let equipamentos, responsaveis, modelo;
+  // O responsável pelo checklist é sempre quem fez o login — não há mais
+  // lista para escolher.
+  let equipamentos, modelo;
   try {
     const res = await Promise.all([
       carregarEquipamentos(false),
-      carregarResponsaveis(),
       api('getChecklistItensModelo', {})
     ]);
     // Checklist só de equipamento em uso (mesma regra do Painel).
-    equipamentos = res[0].filter(function (e) { return e.STATUS === 'em_uso'; }); responsaveis = res[1]; modelo = res[2];
+    equipamentos = res[0].filter(function (e) { return e.STATUS === 'em_uso'; }); modelo = res[1];
   } catch (e) {
     card.innerHTML = '<p class="subtle">Não foi possível carregar o formulário.</p>';
     return;
@@ -1585,11 +1586,6 @@ async function renderChecklistNovo() {
       'Parados e em manutenção não fazem checklist.</p>'));
     return;
   }
-  if (!responsaveis.length) {
-    card.appendChild(el('<div class="note warn">Nenhum responsável cadastrado nesta unidade. ' +
-      'O administrador cadastra a lista em Configurações › Responsáveis.</div>'));
-  }
-
   const selEquip = selectField(card, {
     label: 'Equipamento', required: true,
     value: S.checklistEquipamentoId || '',
@@ -1598,10 +1594,8 @@ async function renderChecklistNovo() {
     })
   });
 
-  const selResp = selectField(card, {
-    label: 'Responsável pelo checklist', required: true,
-    options: responsaveis.map(function (r) { return { value: r.NOME, label: r.NOME }; })
-  });
+  card.appendChild(el('<p class="subtle">Responsável pelo checklist: <strong>' +
+    escapeHtml(S.usuario.NOME) + '</strong> (usuário do login)</p>'));
 
   const fotoEquip = photoField(card, { label: 'Foto do equipamento', required: true });
 
@@ -1667,7 +1661,6 @@ async function renderChecklistNovo() {
   card.appendChild(btn);
   btn.onclick = async function () {
     if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
-    if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
     if (!fotoEquip.getValue()) { toast('A foto do equipamento é obrigatória', true); return; }
     const itens = [];
     for (const r of refs) {
@@ -1681,7 +1674,7 @@ async function renderChecklistNovo() {
         unidade: S.unidade.UNIDADE,
         idUsuario: S.usuario.ID_USUARIO,
         idEquipamento: selEquip.getValue(),
-        responsavel: selResp.getValue(),
+        responsavel: S.usuario.NOME,
         fotoEquipamento: fotoEquip.getValue(),
         itens: itens
       });
