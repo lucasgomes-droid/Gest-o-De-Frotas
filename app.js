@@ -32,6 +32,14 @@ const STATUS_MANUTENCAO = {
   andamento: { label: 'Em andamento',     cls: 'andamento' },
   concluida: { label: 'Finalizada',       cls: 'concluida' }
 };
+// Status que a não conformidade mostra depois que uma manutenção é aberta
+// para ela — acompanha o chamado.
+const FLUXO_NC_MANUTENCAO = {
+  aberta:    { label: 'Manutenção aberta',     cls: 'aberta' },
+  acionado:  { label: 'Técnico acionado',      cls: 'acionado' },
+  andamento: { label: 'Em manutenção',         cls: 'andamento' },
+  concluida: { label: 'Manutenção finalizada', cls: 'concluida' }
+};
 // [OUT/2026] Fluxo do chamado: aberta → técnico acionado → em andamento →
 // finalizada. Quem abre é o Operador; quem move o status é o Administrador.
 const FLUXO_MANUTENCAO = ['aberta', 'acionado', 'andamento', 'concluida'];
@@ -1390,19 +1398,26 @@ async function renderPainel() {
     '</div>'
   ));
 
-  // ---- Equipamentos em manutenção agora ----
-  const cardManut = el('<div class="card stack"><h3 class="title-lg">🔧 Equipamentos em manutenção agora</h3></div>');
+  // ---- Manutenção ----
+  // Cada frota mostra em que etapa o chamado está (aberta → técnico
+  // acionado → em andamento), igual à aba Manutenções.
+  const cardManut = el('<div class="card stack"><h3 class="title-lg">🔧 Manutenção</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Frotas com chamado de manutenção em aberto e a etapa de cada um</p></div>');
   body.appendChild(cardManut);
   if (!d.equipamentosEmManutencao.length) {
-    cardManut.appendChild(el('<p class="subtle">Nenhum equipamento em manutenção neste momento.</p>'));
+    cardManut.appendChild(el('<p class="subtle">Nenhuma frota com manutenção em aberto neste momento.</p>'));
   } else {
     d.equipamentosEmManutencao.forEach(function (e) {
+      const etapa = STATUS_MANUTENCAO[e.STATUS_MANUTENCAO];
       cardManut.appendChild(el(
         '<div class="list-item is-warn" style="cursor:default">' +
           '<span><span class="list-item__title">' + escapeHtml(e.NOME) + '</span>' +
           '<div class="list-item__sub">' + escapeHtml(e.CODIGO || e.TIPO || '') +
-          (e.TITULO_ATUAL ? ' · ' + escapeHtml(e.TITULO_ATUAL) : '') + '</div></span>' +
-          '<span class="tag tag--manut">' + escapeHtml(e.TEMPO_TEXTO) + '</span>' +
+          (e.TITULO_ATUAL ? ' · ' + escapeHtml(e.TITULO_ATUAL) : '') +
+          (etapa ? ' · há ' + escapeHtml(e.TEMPO_TEXTO) : '') + '</div></span>' +
+          (etapa
+            ? '<span class="tag tag--' + etapa.cls + '">' + escapeHtml(etapa.label) + '</span>'
+            : '<span class="tag tag--manut">' + escapeHtml(e.TEMPO_TEXTO) + '</span>') +
         '</div>'
       ));
     });
@@ -2827,6 +2842,11 @@ async function renderNaoConformidades() {
 
     renderPaginado(body, lista, function (nc) {
       const aberta = String(nc.STATUS) === 'aberta';
+      // Depois que uma manutenção é aberta para a NC, o status dela
+      // acompanha o chamado: manutenção aberta → técnico acionado → em
+      // manutenção → manutenção finalizada.
+      const etapaNc = aberta ? FLUXO_NC_MANUTENCAO[nc.STATUS_MANUTENCAO] : null;
+      const manutAtiva = !!etapaNc && nc.STATUS_MANUTENCAO !== 'concluida';
       const emDestaque = ncDestaque && String(nc.ID_NC) === String(ncDestaque);
       const card = el('<div class="card stack" style="gap:10px' + (aberta ? ';border-left:4px solid var(--st-risco)' : '') +
         (emDestaque ? ';outline:2px solid var(--brand);outline-offset:2px' : '') + '"></div>');
@@ -2834,7 +2854,8 @@ async function renderNaoConformidades() {
       appendHtml(card,
         '<div class="row between" style="gap:8px">' +
           '<span class="shiplabel">' + escapeHtml(nc.ID_NC) + '</span>' +
-          '<span class="tag tag--' + (aberta ? 'aberta' : 'concluida') + '">' + (aberta ? 'Aberta' : 'Fechada') + '</span>' +
+          '<span class="tag tag--' + (etapaNc ? etapaNc.cls : aberta ? 'aberta' : 'concluida') + '">' +
+            (etapaNc ? etapaNc.label : aberta ? 'Aberta' : 'Fechada') + '</span>' +
         '</div>' +
         '<div><strong style="font-size:15px">' + escapeHtml(nc.ITEM) + '</strong>' +
         '<div class="subtle">' + escapeHtml(nc.NOME_EQUIPAMENTO) + '</div></div>' +
@@ -2842,7 +2863,8 @@ async function renderNaoConformidades() {
         linhaInfo('Aberta em', fmtDataHora(nc.ABERTA_EM)) +
         (nc.FECHADA_EM ? linhaInfo('Fechada em', fmtDataHora(nc.FECHADA_EM)) : '') +
         linhaInfo(aberta ? 'Tempo em aberto' : 'Tempo até o fechamento', '<strong class="mono">' + escapeHtml(nc.TEMPO_ABERTA_TEXTO || '—') + '</strong>') +
-        (nc.ID_CHECKLIST_ORIGEM ? linhaInfo('Checklist de origem', '<span class="mono">' + escapeHtml(nc.ID_CHECKLIST_ORIGEM) + '</span>') : '')
+        (nc.ID_CHECKLIST_ORIGEM ? linhaInfo('Checklist de origem', '<span class="mono">' + escapeHtml(nc.ID_CHECKLIST_ORIGEM) + '</span>') : '') +
+        (nc.ID_MANUTENCAO ? linhaInfo('Manutenção', '<span class="mono">' + escapeHtml(nc.ID_MANUTENCAO) + '</span>') : '')
       );
       if (nc.FOTO) card.appendChild(el('<div>' + fotoSalva(nc.FOTO, 'Problema') + '</div>'));
 
@@ -2864,7 +2886,12 @@ async function renderNaoConformidades() {
         }
       };
       card.appendChild(btn);
-      if (aberta) {
+      if (aberta && manutAtiva) {
+        const btnVer = el('<button class="btn btn--outline btn--block">🔧 Ver na aba Manutenções</button>');
+        btnVer.onclick = function () { go('manutencoes'); };
+        card.appendChild(btnVer);
+      }
+      if (aberta && !manutAtiva) {
         const btnMan = el('<button class="btn btn--outline btn--block">🔧 Abrir manutenção para este problema</button>');
         btnMan.onclick = function () {
           go('manutencaoForm', {
@@ -3324,12 +3351,12 @@ async function renderRelatorioGas() {
     }).catch(function () { return null; });
     body.innerHTML = '';
     if (!r) return;
-    montarRelatorioGas(body, r);
+    montarRelatorioGas(body, r, load);
   }
   load();
 }
 
-function montarRelatorioGas(body, r) {
+function montarRelatorioGas(body, r, recarregar) {
   const ind = r.indicadores;
 
   body.appendChild(el(
@@ -3425,6 +3452,38 @@ function montarRelatorioGas(body, r) {
     cardTabela.appendChild(scroll);
     if (r.trocas.length > 30) {
       cardTabela.appendChild(el('<p class="subtle">Mostrando os 30 primeiros de ' + r.trocas.length + ' registro(s). O CSV traz tudo.</p>'));
+    }
+
+    // Exclusão de troca lançada por engano — só Administrador.
+    if (ehAdmin() && recarregar) {
+      const boxExcluir = el(
+        '<div class="stack" style="gap:8px;padding-top:12px;border-top:1px solid var(--line)">' +
+          '<strong style="font-size:14.5px">Excluir troca lançada incorretamente</strong>' +
+          '<div class="field"><select id="selTrocaExcluir"><option value="">Selecione a troca…</option></select></div>' +
+        '</div>'
+      );
+      const selTroca = boxExcluir.querySelector('select');
+      r.trocas.forEach(function (t) {
+        selTroca.appendChild(el('<option value="' + escapeHtml(t.ID_TROCA_GAS) + '">' + escapeHtml(t.ID_TROCA_GAS) + ' · ' +
+          escapeHtml(t.NOME_EQUIPAMENTO) + ' · ' + fmtDataHora(t.DATA_HORA) + ' · ' + escapeHtml(t.RESPONSAVEL || '—') + '</option>'));
+      });
+      const btnExcluirTroca = el('<button class="btn btn--danger btn--block">🗑 Excluir troca de gás</button>');
+      boxExcluir.appendChild(btnExcluirTroca);
+      btnExcluirTroca.onclick = async function () {
+        const idTroca = selTroca.value;
+        if (!idTroca) { toast('Selecione a troca a excluir', true); return; }
+        const rotulo = selTroca.options[selTroca.selectedIndex].textContent;
+        if (!window.confirm('Excluir a troca de gás ' + rotulo + '?\n\nEsta ação não pode ser desfeita.')) return;
+        btnExcluirTroca.disabled = true; btnExcluirTroca.textContent = 'Excluindo…';
+        try {
+          await api('deleteTrocaGas', { idTrocaGas: idTroca, idUsuario: S.usuario.ID_USUARIO });
+          toast('Troca de gás ' + idTroca + ' excluída.', false, true);
+          recarregar();
+        } catch (e) {
+          btnExcluirTroca.disabled = false; btnExcluirTroca.textContent = '🗑 Excluir troca de gás';
+        }
+      };
+      cardTabela.appendChild(boxExcluir);
     }
   }
 }
