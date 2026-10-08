@@ -1463,17 +1463,29 @@ async function renderPainel() {
     cardChk.appendChild(el('<p class="subtle">Nenhum equipamento em uso neste setor hoje (parados e em manutenção não entram no checklist).</p>'));
   } else {
     d.checklistDoDia.forEach(function (c) {
+      // Checklist feito com item NOK aparece em vermelho e leva direto às
+      // não conformidades daquele equipamento.
+      const comNok = c.FEITO && String(c.STATUS_CHECKLIST) === 'pendencia';
       const item = el(
-        '<button type="button" class="list-item ' + (c.FEITO ? 'is-ok' : 'is-alert') + '" style="width:100%">' +
+        '<button type="button" class="list-item ' + (c.FEITO && !comNok ? 'is-ok' : 'is-alert') + '" style="width:100%">' +
           '<span><span class="list-item__title">' + escapeHtml(c.NOME) + '</span>' +
           '<div class="list-item__sub">' + (c.FEITO
-            ? 'Feito por ' + escapeHtml(c.RESPONSAVEL || '—') + ' às ' + fmtDataHora(c.DATA_HORA).split(' ')[1]
+            ? 'Feito por ' + escapeHtml(c.RESPONSAVEL || '—') + ' às ' + fmtDataHora(c.DATA_HORA).split(' ')[1] +
+              (comNok ? ' · <strong style="color:var(--st-risco)">com item NOK — ver não conformidades</strong>' : '')
             : 'Checklist ainda não realizado hoje') + '</div></span>' +
-          '<span class="tag ' + (c.FEITO ? 'tag--ok' : 'tag--nok') + '">' + (c.FEITO ? 'Feito' : 'Pendente') + '</span>' +
+          '<span class="tag ' + (c.FEITO && !comNok ? 'tag--ok' : 'tag--nok') + '">' +
+            (comNok ? 'Feito · NOK' : c.FEITO ? 'Feito' : 'Pendente') + '</span>' +
         '</button>'
       );
       item.onclick = function () {
-        go('checklists'); // só Admin chega aqui — ele consulta, não realiza
+        // só Admin chega aqui — ele consulta, não realiza
+        if (comNok) {
+          go('naoConformidades', { ncFiltro: { idEquipamento: c.ID_EQUIPAMENTO, status: '' } });
+        } else if (c.FEITO && c.ID_CHECKLIST) {
+          go('checklistDetalhe', { checklistAtual: { ID_CHECKLIST: c.ID_CHECKLIST, NOME_EQUIPAMENTO: c.NOME, DATA_HORA: c.DATA_HORA } });
+        } else {
+          go('checklists');
+        }
       };
       cardChk.appendChild(item);
     });
@@ -1738,17 +1750,47 @@ async function renderChecklistDetalhe() {
   if (ncs.length) {
     const ncCard = el('<div class="card stack"><h3 class="title-lg">Não conformidades geradas</h3></div>');
     app.appendChild(ncCard);
+    // A tela de não conformidades é do Administrador: para ele o cartão é
+    // clicável e abre a NC; para o Operador continua só informativo.
+    const podeAbrir = ehAdmin();
     ncs.forEach(function (nc) {
-      ncCard.appendChild(el(
-        '<div class="list-item is-alert" style="cursor:default">' +
+      const tagNc = podeAbrir ? 'button type="button"' : 'div';
+      const itemNc = el(
+        '<' + tagNc + ' class="list-item is-alert" style="' + (podeAbrir ? 'width:100%' : 'cursor:default') + '">' +
           '<span><span class="shiplabel">' + escapeHtml(nc.ID_NC) + '</span>' +
           '<div class="list-item__title" style="margin-top:6px">' + escapeHtml(nc.ITEM) + '</div>' +
           '<div class="list-item__sub">' + escapeHtml(nc.DESCRICAO || '') + '</div></span>' +
           '<span class="tag tag--' + (String(nc.STATUS) === 'aberta' ? 'aberta' : 'concluida') + '">' +
             (String(nc.STATUS) === 'aberta' ? 'Aberta' : 'Fechada') + '</span>' +
-        '</div>'
-      ));
+        '</' + (podeAbrir ? 'button' : 'div') + '>'
+      );
+      if (podeAbrir) {
+        itemNc.onclick = function () {
+          go('naoConformidades', { ncFiltro: { idEquipamento: nc.ID_EQUIPAMENTO || c.ID_EQUIPAMENTO, status: '', idNc: nc.ID_NC } });
+        };
+      }
+      ncCard.appendChild(itemNc);
     });
+  }
+
+  // 3) Exclusão de checklist feito por engano — só Administrador.
+  if (ehAdmin()) {
+    const btnExcluir = el('<button class="btn btn--danger btn--block">🗑 Excluir este checklist</button>');
+    app.appendChild(btnExcluir);
+    btnExcluir.onclick = async function () {
+      const aviso = 'Excluir o checklist ' + c.ID_CHECKLIST + ' de ' + c.NOME_EQUIPAMENTO + '?\n\n' +
+        (ncs.length ? 'As ' + ncs.length + ' não conformidade(s) abertas por ele também serão excluídas.\n\n' : '') +
+        'Esta ação não pode ser desfeita.';
+      if (!window.confirm(aviso)) return;
+      btnExcluir.disabled = true; btnExcluir.textContent = 'Excluindo…';
+      try {
+        await api('deleteChecklist', { idChecklist: c.ID_CHECKLIST, idUsuario: S.usuario.ID_USUARIO });
+        toast('Checklist ' + c.ID_CHECKLIST + ' excluído.', false, true);
+        go('checklists');
+      } catch (e) {
+        btnExcluir.disabled = false; btnExcluir.textContent = '🗑 Excluir este checklist';
+      }
+    };
   }
 }
 
@@ -2756,6 +2798,17 @@ async function renderNaoConformidades() {
   selStatus.onchange = load;
   selEquip.onchange = load;
 
+  // Filtro vindo de outra tela (checklist do dia / detalhe do checklist):
+  // vale uma vez só, depois a tela volta ao padrão.
+  const filtroInicial = S.ncFiltro || null;
+  S.ncFiltro = null;
+  let ncDestaque = '';
+  if (filtroInicial) {
+    if (filtroInicial.status !== undefined) selStatus.value = filtroInicial.status;
+    if (filtroInicial.idEquipamento) selEquip.value = String(filtroInicial.idEquipamento);
+    ncDestaque = filtroInicial.idNc || '';
+  }
+
   async function load() {
     body.innerHTML = '<p class="subtle">Carregando…</p>';
     const lista = await api('getNaoConformidades', {
@@ -2774,7 +2827,10 @@ async function renderNaoConformidades() {
 
     renderPaginado(body, lista, function (nc) {
       const aberta = String(nc.STATUS) === 'aberta';
-      const card = el('<div class="card stack" style="gap:10px' + (aberta ? ';border-left:4px solid var(--st-risco)' : '') + '"></div>');
+      const emDestaque = ncDestaque && String(nc.ID_NC) === String(ncDestaque);
+      const card = el('<div class="card stack" style="gap:10px' + (aberta ? ';border-left:4px solid var(--st-risco)' : '') +
+        (emDestaque ? ';outline:2px solid var(--brand);outline-offset:2px' : '') + '"></div>');
+      if (emDestaque) setTimeout(function () { if (card.isConnected) card.scrollIntoView({ block: 'center' }); }, 60);
       appendHtml(card,
         '<div class="row between" style="gap:8px">' +
           '<span class="shiplabel">' + escapeHtml(nc.ID_NC) + '</span>' +
