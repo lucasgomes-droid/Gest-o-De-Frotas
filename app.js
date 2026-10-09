@@ -1973,7 +1973,10 @@ async function renderPainel() {
   const ind = d.indicadores;
   const resumo = d.checklistDoDiaResumo || { total: 0, feitos: 0, pendentes: 0 };
 
-  body.appendChild(el(
+  // Os indicadores da frota e as preventivas são só do Administrador; o
+  // Operador vê o que é dele: fechar checklist, manutenção, máquinas
+  // paradas e a lavagem do dia.
+  if (ehAdmin()) body.appendChild(el(
     '<div class="kpi-grid">' +
       kpi(d.totais.total, 'Equipamentos') +
       kpi(ind.emFuncionamento, 'Em funcionamento', 'kpi--uso') +
@@ -1981,7 +1984,7 @@ async function renderPainel() {
       kpi(ind.parados, 'Parados', 'kpi--parado') +
     '</div>'
   ));
-  body.appendChild(el(
+  if (ehAdmin()) body.appendChild(el(
     '<div class="kpi-grid">' +
       kpi(ind.inativos, 'Inativos', 'kpi--inativo') +
       (ehAdmin() ? kpi(resumo.feitos + '/' + resumo.total, 'Checklists hoje') : '') +
@@ -2052,7 +2055,7 @@ async function renderPainel() {
   // ---- Preventivas próximas (30 dias) ----
   const cardPrev = el('<div class="card stack"><h3 class="title-lg">🗓️ Preventivas próximas</h3>' +
     '<p class="subtle" style="margin-top:-6px">Previstas para os próximos 30 dias</p></div>');
-  body.appendChild(cardPrev);
+  if (ehAdmin()) body.appendChild(cardPrev);
   if (!d.preventivasProximas.length) {
     cardPrev.appendChild(el('<p class="subtle">Nenhuma preventiva prevista para os próximos 30 dias.</p>'));
   } else {
@@ -2268,7 +2271,7 @@ async function renderChecklistNovo() {
       box.appendChild(el('<div class="note warn">⚠️ Este item já está sinalizado: não conformidade <strong>' +
         escapeHtml(pend.idNc) + '</strong> aberta desde ' + fmtData(pend.abertaEm) +
         (pend.descricao ? ' — ' + escapeHtml(pend.descricao) : '') +
-        '. Já vem marcado NOK; não precisa descrever nem fotografar de novo. Se foi resolvido, marque OK.</div>'));
+        '. Já vem marcado em <strong>NOK já aberta</strong>: não precisa descrever nem fotografar de novo. Se foi resolvido, marque OK.</div>'));
     }
 
     const escolha = choiceField(box, {
@@ -2276,7 +2279,7 @@ async function renderChecklistNovo() {
       value: pend ? 'nok' : undefined,
       options: [
         { value: 'ok', label: 'OK', cls: 'ok' },
-        { value: 'nok', label: 'NOK', cls: 'nok' },
+        { value: 'nok', label: pend ? 'NOK já aberta' : 'NOK', cls: 'nok' },
         { value: 'na', label: 'N/A', cls: 'na' }
       ]
     });
