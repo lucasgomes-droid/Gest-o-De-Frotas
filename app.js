@@ -1503,6 +1503,56 @@ function montarVisaoGeralUnidades(body, d) {
 // O mesmo limite existe no Code.gs (LIMITE_HORAS_ENTRE_TROCAS).
 const LIMITE_HORAS_ENTRE_TROCAS = 25;
 
+function temValorCampo(v) { return v !== undefined && v !== null && String(v).trim() !== ''; }
+
+// ------------------------- FECHAMENTO DO CHECKLIST -------------------------
+// O checklist é aberto no início do turno e fechado no fim, com o horímetro
+// final. O Painel mostra, para quem está logado, os checklists dele que
+// ainda não foram fechados (últimos 7 dias). O cartão só aparece se houver.
+async function montarChecklistsEmAberto(card) {
+  const geracao = GERACAO_TELA;
+  const lista = await api('getChecklists', {
+    unidade: S.unidade.UNIDADE, responsavel: S.usuario.NOME, periodo: 'semana'
+  }).catch(function () { return []; });
+  if (geracao !== GERACAO_TELA || !card.isConnected) return;
+  // Servidor ainda sem a coluna de fechamento (versão antiga): não mostra nada.
+  const abertos = (lista || []).filter(function (c) { return ('FECHADO_EM' in c) && !temValorCampo(c.FECHADO_EM); });
+  if (!abertos.length) return;
+
+  card.hidden = false;
+  card.appendChild(el('<h3 class="title-lg">📋 Fechar checklist</h3>'));
+  card.appendChild(el('<p class="subtle" style="margin-top:-6px">No fim do turno, informe o horímetro final da máquina para fechar o checklist.</p>'));
+  abertos.forEach(function (c) {
+    const box = el('<div class="stack" style="gap:8px;padding:12px 0;border-top:1px solid var(--line)"></div>');
+    box.appendChild(el('<div><strong style="font-size:15px">' + escapeHtml(c.NOME_EQUIPAMENTO) + '</strong>' +
+      '<div class="subtle">' + escapeHtml(c.ID_CHECKLIST) + ' · aberto em ' + fmtDataHora(c.DATA_HORA) +
+      (temValorCampo(c.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(c.HORIMETRO_INICIAL) : '') + '</div></div>'));
+    const campo = textField(box, { label: 'Horímetro final', required: true, type: 'text', placeholder: 'Ex: 09540' });
+    campo.input.setAttribute('inputmode', 'numeric');
+    campo.input.addEventListener('input', function () {
+      const limpo = campo.input.value.replace(/[^0-9]/g, '');
+      if (limpo !== campo.input.value) campo.input.value = limpo;
+    });
+    const btn = el('<button class="btn btn--primary btn--block">✓ Fechar checklist</button>');
+    box.appendChild(btn);
+    btn.onclick = async function () {
+      if (!campo.getValue()) { toast('Informe o horímetro final', true); return; }
+      if (temValorCampo(c.HORIMETRO_INICIAL) && Number(campo.getValue()) < Number(c.HORIMETRO_INICIAL)) {
+        toast('O horímetro final não pode ser menor que o inicial (' + c.HORIMETRO_INICIAL + ')', true); return;
+      }
+      btn.disabled = true; btn.textContent = 'Fechando…';
+      try {
+        const r = await api('closeChecklist', { idChecklist: c.ID_CHECKLIST, horimetroFinal: campo.getValue(), idUsuario: S.usuario.ID_USUARIO });
+        toast('Checklist ' + c.ID_CHECKLIST + ' fechado.' +
+          (r.horasTrabalhadas !== null && r.horasTrabalhadas !== undefined ? ' ' + String(r.horasTrabalhadas).replace('.', ',') + 'h no turno.' : ''), false, true);
+        box.remove();
+        if (!card.querySelector('button')) card.hidden = true;
+      } catch (e) { btn.disabled = false; btn.textContent = '✓ Fechar checklist'; }
+    };
+    card.appendChild(box);
+  });
+}
+
 // ------------------------- PERGUNTAS (CHECKLIST / LAVAGEM) -------------------------
 // O Administrador escolhe o formulário (checklist ou lavagem) e o TIPO de
 // equipamento, e adiciona, altera ou exclui perguntas. Vale para todas as
@@ -1785,6 +1835,11 @@ async function renderPainel() {
     '</div>'
   ));
 
+  // ---- Meus checklists em aberto (fechar com o horímetro final) ----
+  const cardFechar = el('<div class="card stack" hidden></div>');
+  body.appendChild(cardFechar);
+  montarChecklistsEmAberto(cardFechar);
+
   // ---- Manutenção ----
   // Cada frota mostra em que etapa o chamado está (aberta → técnico
   // acionado → em andamento), igual à aba Manutenções.
@@ -2021,6 +2076,18 @@ async function renderChecklistNovo() {
 
   const fotoEquip = photoField(card, { label: 'Foto do equipamento', required: true });
 
+  // Horímetro no início do turno — opcional (nem toda máquina tem). No fim
+  // do turno o operador fecha o checklist com o horímetro final (Painel).
+  const horInicial = textField(card, {
+    label: 'Horímetro inicial — opcional', type: 'text', placeholder: 'Ex: 09529',
+    hint: 'Horímetro da máquina agora, no início do turno. No fim do turno você fecha este checklist com o horímetro final.'
+  });
+  horInicial.input.setAttribute('inputmode', 'numeric');
+  horInicial.input.addEventListener('input', function () {
+    const limpo = horInicial.input.value.replace(/[^0-9]/g, '');
+    if (limpo !== horInicial.input.value) horInicial.input.value = limpo;
+  });
+
   card.appendChild(el('<div class="divider"></div>'));
   card.appendChild(el('<h3 class="title-lg">Itens de verificação</h3>'));
 
@@ -2030,6 +2097,7 @@ async function renderChecklistNovo() {
   const itensWrap = el('<div class="stack"></div>');
   card.appendChild(itensWrap);
   let refs = [];
+  let pendencias = {}; // item (minúsculas) → não conformidade aberta da máquina
   function montarItens(lista) {
     itensWrap.innerHTML = '';
     refs = lista.map(function (m, indice) {
@@ -2038,8 +2106,19 @@ async function renderChecklistNovo() {
     box.appendChild(el('<strong style="font-size:15px">' + (indice + 1) + '. ' + escapeHtml(m.item) + '</strong>'));
     box.appendChild(el('<p class="subtle" style="margin-top:-6px">' + escapeHtml(m.instrucao) + '</p>'));
 
+    // Item que já tem não conformidade ABERTA nesta máquina: vem marcado
+    // NOK e não pede descrição nem foto de novo.
+    const pend = pendencias[String(m.item).toLowerCase()] || null;
+    if (pend) {
+      box.appendChild(el('<div class="note warn">⚠️ Este item já está sinalizado: não conformidade <strong>' +
+        escapeHtml(pend.idNc) + '</strong> aberta desde ' + fmtData(pend.abertaEm) +
+        (pend.descricao ? ' — ' + escapeHtml(pend.descricao) : '') +
+        '. Já vem marcado NOK; não precisa descrever nem fotografar de novo. Se foi resolvido, marque OK.</div>'));
+    }
+
     const escolha = choiceField(box, {
       label: 'Resultado', required: true, columns: 3,
+      value: pend ? 'nok' : undefined,
       options: [
         { value: 'ok', label: 'OK', cls: 'ok' },
         { value: 'nok', label: 'NOK', cls: 'nok' },
@@ -2056,10 +2135,11 @@ async function renderChecklistNovo() {
       sub.hidden = v !== 'nok';
       sub.innerHTML = '';
       descricao = null; fotoProblema = null;
-      if (v === 'nok') {
+      if (v === 'nok' && !pend) {
         descricao = textField(sub, { label: 'Descreva o problema encontrado', required: true, multiline: true });
         fotoProblema = photoField(sub, { label: 'Foto do problema', required: true });
       }
+      if (v !== 'nok' || pend) sub.hidden = true;
     });
 
     return {
@@ -2068,7 +2148,7 @@ async function renderChecklistNovo() {
       validar: function () {
         const v = escolha.getValue();
         if (!v) return 'Responda o item "' + m.item + '".';
-        if (v === 'nok') {
+        if (v === 'nok' && !pend) {
           if (!descricao || !descricao.getValue()) return 'Descreva o problema do item "' + m.item + '".';
           if (!fotoProblema || !fotoProblema.getValue()) return 'Anexe a foto do problema do item "' + m.item + '".';
         }
@@ -2080,8 +2160,8 @@ async function renderChecklistNovo() {
           item: m.item,
           instrucao: m.instrucao,
           resposta: v,
-          descricaoProblema: v === 'nok' ? descricao.getValue() : '',
-          fotoProblema: v === 'nok' ? fotoProblema.getValue() : ''
+          descricaoProblema: v === 'nok' && descricao ? descricao.getValue() : '',
+          fotoProblema: v === 'nok' && fotoProblema ? fotoProblema.getValue() : ''
         };
       }
     };
@@ -2096,12 +2176,20 @@ async function renderChecklistNovo() {
       return;
     }
     const tipo = String(equip.TIPO || '');
-    if (tipo === tipoCarregado) return; // mesmo tipo: mantém o que já foi respondido
-    tipoCarregado = tipo; refs = [];
+    // A chave é o equipamento (não só o tipo): os itens já sinalizados com
+    // não conformidade aberta mudam de máquina para máquina.
+    const chave = String(equip.ID_EQUIPAMENTO);
+    if (chave === tipoCarregado) return;
+    tipoCarregado = chave; refs = [];
     itensWrap.innerHTML = '<p class="subtle">Carregando itens…</p>';
-    const lista = await api('getChecklistItensModelo', { tipo: tipo }).catch(function () { return null; });
-    if (tipoCarregado !== tipo) return; // trocou de equipamento no meio
-    montarItens(lista && lista.length ? lista : modelo);
+    const res = await Promise.all([
+      api('getChecklistItensModelo', { tipo: tipo }).catch(function () { return null; }),
+      api('getPendenciasEquipamento', { idEquipamento: equip.ID_EQUIPAMENTO }).catch(function () { return []; })
+    ]);
+    if (tipoCarregado !== chave) return; // trocou de equipamento no meio
+    pendencias = {};
+    (res[1] || []).forEach(function (nc) { pendencias[String(nc.item).toLowerCase()] = nc; });
+    montarItens(res[0] && res[0].length ? res[0] : modelo);
   }
   selEquip.select.addEventListener('change', carregarItensDoEquipamento);
   carregarItensDoEquipamento();
@@ -2126,6 +2214,7 @@ async function renderChecklistNovo() {
         idEquipamento: selEquip.getValue(),
         responsavel: S.usuario.NOME,
         fotoEquipamento: fotoEquip.getValue(),
+        horimetroInicial: horInicial.getValue() || undefined,
         itens: itens
       });
       let msg = 'Checklist ' + res.idChecklist + ' registrado!';
@@ -2135,6 +2224,7 @@ async function renderChecklistNovo() {
       if (res.naoConformidadesIgnoradas && res.naoConformidadesIgnoradas.length) {
         msg += ' ' + res.naoConformidadesIgnoradas.length + ' já estava(m) aberta(s).';
       }
+      msg += ' No fim do turno, feche o checklist com o horímetro final (Painel).';
       toast(msg, false, true);
       S.checklistEquipamentoId = null;
       go('checklists');
@@ -2162,7 +2252,14 @@ async function renderChecklistDetalhe() {
     linhaInfo('Resultado', '<span class="tag tag--' + info.cls + '">' + escapeHtml(info.label) + '</span>') +
     linhaInfo('Equipamento', '<strong>' + escapeHtml(c.NOME_EQUIPAMENTO) + '</strong>') +
     linhaInfo('Responsável', escapeHtml(c.RESPONSAVEL || '—')) +
-    linhaInfo('Data/hora', fmtDataHora(c.DATA_HORA))
+    linhaInfo('Data/hora', fmtDataHora(c.DATA_HORA)) +
+    (temValorCampo(c.HORIMETRO_INICIAL) ? linhaInfo('Horímetro inicial', '<span class="mono">' + escapeHtml(c.HORIMETRO_INICIAL) + '</span>') : '') +
+    (temValorCampo(c.FECHADO_EM)
+      ? linhaInfo('Horímetro final', '<span class="mono">' + escapeHtml(c.HORIMETRO_FINAL) + '</span>') +
+        linhaInfo('Fechado em', fmtDataHora(c.FECHADO_EM)) +
+        (temValorCampo(c.HORIMETRO_INICIAL) ? linhaInfo('Horas no turno', '<strong class="mono">' +
+          String(Math.round((Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL)) * 100) / 100).replace('.', ',') + 'h</strong>') : '')
+      : linhaInfo('Fechamento', '<span class="tag tag--nok">Em aberto — falta o horímetro final</span>'))
   );
   if (c.FOTO_EQUIPAMENTO) {
     card.appendChild(el('<div class="stack" style="gap:6px"><span class="subtle">Foto do equipamento</span>' +
@@ -2767,6 +2864,20 @@ async function renderManutencaoForm() {
 
   const desc = textField(card, { label: 'Descrição', multiline: true, value: editando ? m.DESCRICAO : (pre.descricao || '') });
 
+  // Horímetro da máquina na abertura do chamado — opcional.
+  let horManut = null;
+  if (!editando) {
+    horManut = textField(card, {
+      label: 'Horímetro da máquina — opcional', type: 'text', placeholder: 'Ex: 09529',
+      hint: 'Se a máquina tiver horímetro, digite os números do visor, sem vírgula nem ponto.'
+    });
+    horManut.input.setAttribute('inputmode', 'numeric');
+    horManut.input.addEventListener('input', function () {
+      const limpo = horManut.input.value.replace(/[^0-9]/g, '');
+      if (limpo !== horManut.input.value) horManut.input.value = limpo;
+    });
+  }
+
   if (!editando) {
     card.appendChild(el('<div class="note">O chamado entra como <strong>Aberta</strong> com a data e hora de agora, ' +
       'e os responsáveis do setor recebem o e-mail na hora.</div>'));
@@ -2786,7 +2897,8 @@ async function renderManutencaoForm() {
       tipo: selTipo.getValue(),
       prioridade: selPrio.getValue(),
       descricao: desc.getValue(),
-      dataPrevista: selTipo.getValue() === 'preventiva' ? dtPrevista.getValue() : ''
+      dataPrevista: selTipo.getValue() === 'preventiva' ? dtPrevista.getValue() : '',
+      horimetro: horManut && horManut.getValue() ? horManut.getValue() : undefined
     };
 
     btn.disabled = true; btn.textContent = 'Salvando…';
@@ -2820,6 +2932,7 @@ function renderManutencaoDetalhe() {
     linhaInfo('Status', tagManutencao(m.STATUS)) +
     linhaInfo('Tipo', escapeHtml(m.TIPO === 'preventiva' ? 'Preventiva' : 'Corretiva')) +
     linhaInfo('Prioridade', tagPrioridade(m.PRIORIDADE)) +
+    (m.HORIMETRO !== undefined && m.HORIMETRO !== null && m.HORIMETRO !== '' ? linhaInfo('Horímetro na abertura', '<span class="mono">' + escapeHtml(m.HORIMETRO) + '</span>') : '') +
     linhaInfo('Frota', '<strong>' + escapeHtml(m.NOME_EQUIPAMENTO) + '</strong>') +
     (m.DATA_PREVISTA ? linhaInfo('Data prevista', fmtData(m.DATA_PREVISTA)) : '')
   );
