@@ -943,6 +943,7 @@ const SCREENS = {
   relatorioExecutivo: renderRelatorioExecutivo,
   configuracoes: renderConfiguracoes,
   perguntas: renderPerguntas,
+  horasRodadas: renderHorasRodadas,
   mais: renderMais
 };
 
@@ -956,13 +957,14 @@ const TAB_PAI = {
   equipamentos: 'mais',
   naoConformidades: 'mais',
   configuracoes: 'mais',
-  perguntas: 'mais'
+  perguntas: 'mais',
+  horasRodadas: 'mais'
 };
 
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
 // "mais" NÃO entra aqui: o Operador também acessa (Preventivas/Histórico),
 // só que com um conteúdo diferente — ver renderMais().
-const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'visaoGeral'];
+const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'horasRodadas', 'visaoGeral'];
 
 function render() {
   // [ESTABILIDADE OUT/2026] Cada troca de tela ganha um número; as leituras
@@ -1553,6 +1555,159 @@ async function montarChecklistsEmAberto(card) {
   });
 }
 
+// ------------------------- HORAS RODADAS -------------------------
+// Tempo que cada máquina rodou, calculado pelo checklist: horímetro final
+// (fechamento) − horímetro inicial (abertura). Cada checklist fechado é um
+// turno, contado no dia em que foi aberto.
+const COLUNAS_HORAS_RODADAS = [
+  ['dia', 'Data'], ['NOME_EQUIPAMENTO', 'Máquina'], ['RESPONSAVEL', 'Operador'],
+  ['HORIMETRO_INICIAL', 'Horímetro inicial'], ['HORIMETRO_FINAL', 'Horímetro final'],
+  ['horas', 'Horas rodadas', function (v) { return String(v).replace('.', ','); }]
+];
+
+async function renderHorasRodadas() {
+  appendHtml(app, screenHeader('Horas rodadas', 'Tempo de máquina rodando',
+    'Horímetro final − inicial de cada checklist · ' + unidadeSetorLabel()));
+  app.appendChild(botaoVoltar('mais'));
+
+  const hojeIso = function () {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  const topo = el(
+    '<div class="stack" style="gap:8px">' +
+      '<div class="filters">' +
+        '<select data-role="periodo">' +
+          '<option value="hoje">Hoje</option>' +
+          '<option value="semana">Últimos 7 dias</option>' +
+          '<option value="mes">Últimos 30 dias</option>' +
+          '<option value="todos">Todo o período</option>' +
+          '<option value="custom">Período personalizado</option>' +
+        '</select>' +
+        '<select data-role="equip"><option value="">Todas as máquinas</option></select>' +
+      '</div>' +
+      '<div class="filters" data-role="custom" hidden>' +
+        '<input type="date" data-role="ini"><input type="date" data-role="fim">' +
+        '<button class="btn btn--outline btn--sm" data-role="aplicar">Aplicar</button>' +
+      '</div>' +
+    '</div>'
+  );
+  app.appendChild(topo);
+  const selPeriodo = topo.querySelector('[data-role="periodo"]');
+  const selEquip = topo.querySelector('[data-role="equip"]');
+  const custom = topo.querySelector('[data-role="custom"]');
+  const ini = topo.querySelector('[data-role="ini"]'), fim = topo.querySelector('[data-role="fim"]');
+  selPeriodo.value = 'semana';
+
+  const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando…</p></div>');
+  app.appendChild(body);
+
+  (await carregarEquipamentos(true)).forEach(function (e) {
+    selEquip.appendChild(el('<option value="' + escapeHtml(e.ID_EQUIPAMENTO) + '">' + escapeHtml(e.NOME) + '</option>'));
+  });
+
+  selPeriodo.onchange = function () { custom.hidden = selPeriodo.value !== 'custom'; if (selPeriodo.value !== 'custom') load(); };
+  selEquip.onchange = load;
+  topo.querySelector('[data-role="aplicar"]').onclick = function () {
+    if (!ini.value && !fim.value) { toast('Escolha ao menos uma data', true); return; }
+    load();
+  };
+
+  async function load() {
+    body.innerHTML = '<p class="subtle">Carregando…</p>';
+    const p = selPeriodo.value;
+    const filtro = p === 'hoje' ? { periodo: 'custom', dataInicio: hojeIso(), dataFim: hojeIso() }
+      : p === 'custom' ? { periodo: 'custom', dataInicio: ini.value || undefined, dataFim: fim.value || undefined }
+      : { periodo: p };
+    const lista = await api('getChecklists', Object.assign({
+      unidade: S.unidade.UNIDADE, idEquipamento: selEquip.value || undefined
+    }, filtro)).catch(function () { return null; });
+    body.innerHTML = '';
+    if (lista === null) { body.appendChild(el(blocoFalhaCarregar())); return; }
+    montarHorasRodadas(body, lista);
+  }
+  load();
+}
+
+function montarHorasRodadas(body, checklists) {
+  const hh = function (v) { return String(Math.round(v * 10) / 10).replace('.', ',') + 'h'; };
+  const turnos = [];      // checklists fechados com os dois horímetros
+  let emAberto = 0, semHorimetro = 0, invalidos = 0;
+  checklists.forEach(function (c) {
+    if (!temValorCampo(c.FECHADO_EM)) { emAberto++; return; }
+    if (!temValorCampo(c.HORIMETRO_INICIAL) || !temValorCampo(c.HORIMETRO_FINAL)) { semHorimetro++; return; }
+    const horas = Math.round((Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL)) * 100) / 100;
+    if (isNaN(horas) || horas < 0) { invalidos++; return; }
+    const d = new Date(c.DATA_HORA);
+    const chaveDia = isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    turnos.push(Object.assign({}, c, { horas: horas, chaveDia: chaveDia, dia: fmtData(c.DATA_HORA) }));
+  });
+
+  const total = turnos.reduce(function (s, t) { return s + t.horas; }, 0);
+  const porMaquina = {}, porDia = {};
+  turnos.forEach(function (t) {
+    const k = String(t.ID_EQUIPAMENTO);
+    if (!porMaquina[k]) porMaquina[k] = { nome: t.NOME_EQUIPAMENTO, horas: 0, turnos: 0, dias: {} };
+    porMaquina[k].horas += t.horas; porMaquina[k].turnos++; porMaquina[k].dias[t.chaveDia] = true;
+    if (!porDia[t.chaveDia]) porDia[t.chaveDia] = { rotulo: t.dia, horas: 0, turnos: 0 };
+    porDia[t.chaveDia].horas += t.horas; porDia[t.chaveDia].turnos++;
+  });
+  const maquinas = Object.keys(porMaquina).map(function (k) { return porMaquina[k]; }).sort(function (a, b) { return b.horas - a.horas; });
+  const dias = Object.keys(porDia).sort().reverse().map(function (k) { return porDia[k]; });
+
+  body.appendChild(el(
+    '<div class="kpi-grid">' +
+      kpi(hh(total), 'Horas rodadas', 'kpi--accent') +
+      kpi(turnos.length, 'Turnos fechados', 'kpi--uso') +
+      kpi(maquinas.length, 'Máquinas que rodaram') +
+      kpi(dias.length ? hh(total / dias.length) : '—', 'Média por dia') +
+    '</div>'
+  ));
+
+  if (emAberto || semHorimetro || invalidos) {
+    body.appendChild(el('<div class="note warn">Fora da conta neste período: ' +
+      [emAberto ? emAberto + ' checklist(s) ainda em aberto (sem horímetro final)' : '',
+       semHorimetro ? semHorimetro + ' sem horímetro inicial (feitos antes de ser obrigatório)' : '',
+       invalidos ? invalidos + ' com horímetro final menor que o inicial' : ''].filter(Boolean).join(' · ') + '.</div>'));
+  }
+  if (!turnos.length) {
+    body.appendChild(el('<div class="card"><p class="subtle">Nenhum checklist fechado com horímetro neste período. ' +
+      'As horas aparecem depois que o operador fecha o checklist com o horímetro final.</p></div>'));
+    return;
+  }
+
+  function barras(titulo, subtitulo, itens, rotulo, valor, texto) {
+    const card = el('<div class="card stack"><h3 class="title-lg">' + titulo + '</h3>' +
+      '<p class="subtle" style="margin-top:-6px">' + escapeHtml(subtitulo) + '</p></div>');
+    const max = Math.max.apply(null, itens.map(valor).concat([0])) || 1;
+    itens.forEach(function (i) {
+      card.appendChild(el(
+        '<div class="bar-row"><span class="label" style="width:130px">' + escapeHtml(rotulo(i)) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, (valor(i) / max) * 100) + '%"></div></div>' +
+        '<span class="bar-val" style="width:auto;min-width:110px">' + escapeHtml(texto(i)) + '</span></div>'
+      ));
+    });
+    body.appendChild(card);
+  }
+  barras('🚜 Horas por máquina', 'Total no período, turnos fechados e média por dia trabalhado', maquinas,
+    function (m) { return m.nome; }, function (m) { return m.horas; },
+    function (m) { return hh(m.horas) + ' · ' + m.turnos + ' turno(s) · ' + hh(m.horas / Object.keys(m.dias).length) + '/dia'; });
+  barras('📅 Horas por dia', 'Soma de todas as máquinas em cada dia', dias.slice(0, 31),
+    function (d) { return d.rotulo; }, function (d) { return d.horas; },
+    function (d) { return hh(d.horas) + ' · ' + d.turnos + ' turno(s)'; });
+
+  const cardTab = el('<div class="card stack"><h3 class="title-lg">Turno a turno</h3></div>');
+  body.appendChild(cardTab);
+  const linhas = turnos.slice().sort(function (a, b) { return a.chaveDia < b.chaveDia ? 1 : a.chaveDia > b.chaveDia ? -1 : String(a.NOME_EQUIPAMENTO).localeCompare(String(b.NOME_EQUIPAMENTO)); });
+  const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
+  btnCsv.onclick = function () { downloadCSV(nomeArquivo('horas_rodadas', 'csv'), COLUNAS_HORAS_RODADAS, linhas); };
+  cardTab.appendChild(btnCsv);
+  const scroll = el('<div class="table-scroll"></div>');
+  scroll.appendChild(tabelaHtml(COLUNAS_HORAS_RODADAS, linhas.slice(0, 60)));
+  cardTab.appendChild(scroll);
+  if (linhas.length > 60) cardTab.appendChild(el('<p class="subtle">Mostrando os 60 mais recentes de ' + linhas.length + ' turno(s). O CSV traz tudo.</p>'));
+}
+
 // ------------------------- PERGUNTAS (CHECKLIST / LAVAGEM) -------------------------
 // O Administrador escolhe o formulário (checklist ou lavagem) e o TIPO de
 // equipamento, e adiciona, altera ou exclui perguntas. Vale para todas as
@@ -2076,10 +2231,10 @@ async function renderChecklistNovo() {
 
   const fotoEquip = photoField(card, { label: 'Foto do equipamento', required: true });
 
-  // Horímetro no início do turno — opcional (nem toda máquina tem). No fim
-  // do turno o operador fecha o checklist com o horímetro final (Painel).
+  // Horímetro no início do turno — obrigatório: é dele (e do horímetro final,
+  // no fechamento) que sai o tempo que a máquina rodou no dia.
   const horInicial = textField(card, {
-    label: 'Horímetro inicial — opcional', type: 'text', placeholder: 'Ex: 09529',
+    label: 'Horímetro inicial', required: true, type: 'text', placeholder: 'Ex: 09529',
     hint: 'Horímetro da máquina agora, no início do turno. No fim do turno você fecha este checklist com o horímetro final.'
   });
   horInicial.input.setAttribute('inputmode', 'numeric');
@@ -2199,6 +2354,7 @@ async function renderChecklistNovo() {
   btn.onclick = async function () {
     if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
     if (!fotoEquip.getValue()) { toast('A foto do equipamento é obrigatória', true); return; }
+    if (!horInicial.getValue()) { toast('Informe o horímetro inicial da máquina', true); horInicial.input.focus(); return; }
     if (!refs.length) { toast('Aguarde os itens carregarem', true); return; }
     const itens = [];
     for (const r of refs) {
@@ -2214,7 +2370,7 @@ async function renderChecklistNovo() {
         idEquipamento: selEquip.getValue(),
         responsavel: S.usuario.NOME,
         fotoEquipamento: fotoEquip.getValue(),
-        horimetroInicial: horInicial.getValue() || undefined,
+        horimetroInicial: horInicial.getValue(),
         itens: itens
       });
       let msg = 'Checklist ' + res.idChecklist + ' registrado!';
@@ -4424,6 +4580,7 @@ function renderMais() {
       menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
       menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
+      menuCard('⏱️', 'Horas rodadas', 'Tempo que cada máquina rodou, pelo horímetro do checklist', 'horasRodadas') +
       menuCard('📝', 'Perguntas', 'Perguntas do checklist e da lavagem, por tipo de equipamento', 'perguntas') +
       menuCard('⚙️', 'Configurações', 'Responsáveis do checklist, usuários e unidades', 'configuracoes') +
     '</div>'
