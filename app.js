@@ -3825,8 +3825,8 @@ function montarRelatorio(body, r, filtroAtual) {
     '</div>'
   ));
   cardResumo.appendChild(el('<div class="note">' +
-    '<strong>Em operação</strong> é o que a máquina realmente rodou: a soma das horas do horímetro em cada troca de gás do período' +
-    (imp.maquinasComHorimetro !== undefined ? ' (' + imp.maquinasComHorimetro + ' máquina(s) com troca no período)' : '') + '. ' +
+    '<strong>Em operação</strong> é o que a máquina realmente rodou: as horas rodadas do checklist — horímetro final menos inicial de cada checklist fechado no período' +
+    (imp.maquinasComHorimetro !== undefined ? ' (' + imp.maquinasComHorimetro + ' máquina(s) com checklist fechado)' : '') + '. ' +
     '<strong>Sem manutenção</strong> é o tempo de expediente em que ela não estava quebrada nem parada. ' +
     'Expediente contado: ' + escapeHtml(imp.expediente || '—') + '.</div>'));
 
@@ -4376,7 +4376,7 @@ function montarFrotasExecutivo(body, f) {
       kpi(fmtMoeda(f.gasCustoTotal || 0), 'Gasto com gás', 'kpi--accent') +
     '</div>'
   ));
-  body.appendChild(el('<p class="subtle" style="margin-top:-4px">Horas em operação = horímetro das trocas de gás (' + (f.maquinasComHorimetro || 0) +
+  body.appendChild(el('<p class="subtle" style="margin-top:-4px">Horas em operação = horas rodadas do checklist, horímetro final − inicial (' + (f.maquinasComHorimetro || 0) +
     ' máquina(s)). Horas paradas = manutenção + parada, só no expediente (' + escapeHtml(f.expediente || '') + ').</p>'));
 
   // ---- Gráficos por frota ----
@@ -4386,7 +4386,7 @@ function montarFrotasExecutivo(body, f) {
   body.appendChild(cardBarras('Quantidade de manutenções por frota', 'Chamados abertos no período',
     (f.manutencoesPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.quantidade, texto: x.quantidade + ' · ' + x.tempoTexto }; }),
     'var(--accent)', 'Nenhuma manutenção no período.'));
-  body.appendChild(cardBarras('Horas em operação por frota', 'Horas rodadas pelo horímetro das trocas de gás do período',
+  body.appendChild(cardBarras('Horas em operação por frota', 'Horas rodadas pelo horímetro do checklist (final − inicial) no período',
     (f.operacaoPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
     'var(--st-uso)', 'Nenhuma troca de gás com horímetro no período.'));
   const gas = f.gasPorFrota || [];
