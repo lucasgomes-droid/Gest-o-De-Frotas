@@ -1057,7 +1057,7 @@ function updateChrome() {
         { s: 'checklists', ic: '✅', label: 'Checklist' },
         { s: 'manutencoes', ic: '🔧', label: 'Abertura' },
         { s: 'lavagemForm', ic: '🧽', label: 'Lavagem' },
-        { s: 'trocaGasForm', ic: '⛽', label: 'Gás' },
+        { s: 'trocaGasForm', ic: '⛽', label: 'Gás / Bateria' },
         { s: 'mais', ic: '☰', label: 'Mais' }
       ];
   let ativa = TAB_PAI[S.screen] || S.screen;
@@ -2497,14 +2497,14 @@ async function renderLavagemForm() {
   const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
   app.appendChild(card);
 
-  let equipamentos, responsaveis, modelo;
+  // O responsável pela lavagem é sempre quem fez o login, como no checklist.
+  let equipamentos, modelo;
   try {
     const res = await Promise.all([
       carregarEquipamentos(false),
-      carregarResponsaveis(),
       api('getLavagemItensModelo', {})
     ]);
-    equipamentos = res[0]; responsaveis = res[1]; modelo = res[2];
+    equipamentos = res[0]; modelo = res[1];
   } catch (e) {
     card.innerHTML = '<p class="subtle">Não foi possível carregar o formulário.</p>';
     return;
@@ -2516,10 +2516,6 @@ async function renderLavagemForm() {
       'Peça ao administrador para cadastrar em Equipamentos.</p>'));
     return;
   }
-  if (!responsaveis.length) {
-    card.appendChild(el('<div class="note warn">Nenhum responsável cadastrado nesta unidade. ' +
-      'O administrador cadastra a lista em Configurações › Responsáveis.</div>'));
-  }
 
   const selEquip = selectField(card, {
     label: 'Equipamento', required: true,
@@ -2528,10 +2524,8 @@ async function renderLavagemForm() {
     })
   });
 
-  const selResp = selectField(card, {
-    label: 'Responsável pela lavagem', required: true,
-    options: responsaveis.map(function (r) { return { value: r.NOME, label: r.NOME }; })
-  });
+  card.appendChild(el('<p class="subtle">Responsável pela lavagem: <strong>' +
+    escapeHtml(S.usuario.NOME) + '</strong> (usuário do login)</p>'));
 
   const fotoEquip = photoField(card, { label: 'Foto do equipamento', required: true });
 
@@ -2618,7 +2612,6 @@ async function renderLavagemForm() {
   card.appendChild(btn);
   btn.onclick = async function () {
     if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
-    if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
     if (!fotoEquip.getValue()) { toast('A foto do equipamento é obrigatória', true); return; }
     if (!refs.length) { toast('Aguarde os itens carregarem', true); return; }
     const itens = [];
@@ -2633,7 +2626,7 @@ async function renderLavagemForm() {
         unidade: S.unidade.UNIDADE,
         idUsuario: S.usuario.ID_USUARIO,
         idEquipamento: selEquip.getValue(),
-        responsavel: selResp.getValue(),
+        responsavel: S.usuario.NOME,
         fotoEquipamento: fotoEquip.getValue(),
         itens: itens
       });
@@ -2648,16 +2641,16 @@ async function renderLavagemForm() {
 // ------------------------- TROCA DE GÁS -------------------------
 
 async function renderTrocaGasForm() {
-  appendHtml(app, screenHeader('Troca de gás', 'Registrar troca de gás',
-    'Informe o horímetro atual — o app calcula sozinho as horas de uso desde a última troca.'));
+  appendHtml(app, screenHeader('Gás / Bateria', 'Troca de gás ou carga de bateria',
+    'Escolha a frota: a combustão registra troca de gás; elétrica registra carregamento da bateria.'));
 
   const card = el('<div class="card stack"><p class="subtle">Carregando formulário…</p></div>');
   app.appendChild(card);
 
-  let equipamentos, responsaveis;
+  // O responsável pela troca é sempre quem fez o login, como no checklist.
+  let equipamentos;
   try {
-    const res = await Promise.all([carregarEquipamentos(false), carregarResponsaveis()]);
-    equipamentos = res[0]; responsaveis = res[1];
+    equipamentos = await carregarEquipamentos(false);
   } catch (e) {
     card.innerHTML = '<p class="subtle">Não foi possível carregar o formulário.</p>';
     return;
@@ -2670,10 +2663,8 @@ async function renderTrocaGasForm() {
     return;
   }
 
-  const selResp = selectField(card, {
-    label: 'Responsável', required: true,
-    options: responsaveis.map(function (r) { return { value: r.NOME, label: r.NOME }; })
-  });
+  card.appendChild(el('<p class="subtle">Responsável: <strong>' +
+    escapeHtml(S.usuario.NOME) + '</strong> (usuário do login)</p>'));
 
   const selEquip = selectField(card, {
     label: 'Frota (equipamento)', required: true,
@@ -2705,6 +2696,11 @@ async function renderTrocaGasForm() {
       '<div class="horimetro-exemplo__campo">09529</div>' +
     '</div>'
   ));
+
+  // Aviso que aparece quando a frota escolhida é elétrica.
+  const notaBateria = el('<div class="note" hidden>🔋 <strong>Máquina elétrica:</strong> registre o carregamento da bateria. ' +
+    'Informe o horímetro agora, na hora de colocar para carregar.</div>');
+  card.appendChild(notaBateria);
 
   const kg = textField(card, {
     label: 'Quantidade de gás (kg) — opcional', required: false, type: 'text', placeholder: 'Ex: 20',
@@ -2739,6 +2735,22 @@ async function renderTrocaGasForm() {
   }
   await carregarFornecedores();
 
+  // Combustão × elétrica: a mesma tela, só muda o que aparece.
+  function frotaEscolhida() {
+    return equipamentos.find(function (x) { return String(x.ID_EQUIPAMENTO) === String(selEquip.getValue()); }) || null;
+  }
+  function ehEletrica() {
+    const f = frotaEscolhida();
+    return !!f && String(f.MOTORIZACAO || '').toLowerCase() === 'eletrica';
+  }
+  function aplicarModo() {
+    const eletrica = ehEletrica();
+    notaBateria.hidden = !eletrica;
+    kg.node.hidden = eletrica;
+    fornecedorWrap.hidden = eletrica;
+    btn.textContent = eletrica ? '🔋 Registrar carregamento' : '✓ Registrar troca de gás';
+  }
+
   // ---- Conferência do horímetro ----
   // Mostra o horímetro da última troca da frota e as horas calculadas. Se
   // passar de LIMITE_HORAS_ENTRE_TROCAS, pede confirmação antes de salvar
@@ -2756,15 +2768,19 @@ async function renderTrocaGasForm() {
   function atualizarInfoHoras() {
     if (!selEquip.getValue()) { infoHoras.textContent = ''; return; }
     if (ultimaTrocaDe !== selEquip.getValue()) { infoHoras.textContent = 'Buscando a última troca desta frota…'; return; }
-    if (!ultimaTroca) { infoHoras.textContent = 'Primeira troca registrada desta frota — não há horímetro anterior para comparar.'; return; }
+    const eletrica = ehEletrica();
+    const nomeReg = eletrica ? 'carga' : 'troca';
+    if (!ultimaTroca) { infoHoras.textContent = 'Primeira ' + nomeReg + ' registrada desta frota — não há horímetro anterior para comparar.'; return; }
     const h = horasCalculadas();
-    let texto = 'Última troca: horímetro ' + ultimaTroca.HORIMETRO + ' em ' + fmtData(ultimaTroca.DATA_HORA) + '.';
+    let texto = 'Última ' + nomeReg + ': horímetro ' + ultimaTroca.HORIMETRO + ' em ' + fmtData(ultimaTroca.DATA_HORA) + '.';
+    // O aviso de horas altas é só para gás; carga de bateria não tem esse limite.
+    const alta = !eletrica && h !== null && h > LIMITE_HORAS_ENTRE_TROCAS;
     if (h !== null) {
-      texto += ' Horas desde a última troca: ' + String(h).replace('.', ',') + 'h' +
-        (h > LIMITE_HORAS_ENTRE_TROCAS ? ' — acima de ' + LIMITE_HORAS_ENTRE_TROCAS + 'h, confira o horímetro.' : '.');
+      texto += ' Horas desde a última ' + nomeReg + ': ' + String(h).replace('.', ',') + 'h' +
+        (alta ? ' — acima de ' + LIMITE_HORAS_ENTRE_TROCAS + 'h, confira o horímetro.' : '.');
     }
     infoHoras.textContent = texto;
-    infoHoras.style.color = (h !== null && (h > LIMITE_HORAS_ENTRE_TROCAS || h < 0)) ? 'var(--st-risco)' : '';
+    infoHoras.style.color = (alta || (h !== null && h < 0)) ? 'var(--st-risco)' : '';
   }
   async function buscarUltimaTroca() {
     const id = selEquip.getValue();
@@ -2772,14 +2788,14 @@ async function renderTrocaGasForm() {
     fecharAvisoHoras();
     atualizarInfoHoras();
     if (!id) return;
-    const lista = await api('getTrocasGas', { unidade: S.unidade.UNIDADE, idEquipamento: id }).catch(function () { return null; });
+    const lista = await api(ehEletrica() ? 'getCarregamentos' : 'getTrocasGas', { unidade: S.unidade.UNIDADE, idEquipamento: id }).catch(function () { return null; });
     if (selEquip.getValue() !== id) return; // trocou de frota no meio
     if (lista === null) { infoHoras.textContent = ''; return; } // sem resposta: o servidor confere ao salvar
     ultimaTroca = lista.length ? lista[0] : null; // o servidor devolve a mais recente primeiro
     ultimaTrocaDe = id;
     atualizarInfoHoras();
   }
-  selEquip.select.addEventListener('change', buscarUltimaTroca);
+  selEquip.select.addEventListener('change', function () { aplicarModo(); buscarUltimaTroca(); });
   horimetro.input.addEventListener('input', function () { fecharAvisoHoras(); atualizarInfoHoras(); });
 
   const avisoHoras = el('<div class="note warn stack" style="gap:10px;display:none"></div>');
@@ -2802,11 +2818,12 @@ async function renderTrocaGasForm() {
   const btn = el('<button class="btn btn--primary btn--block" style="margin-top:6px">✓ Registrar troca de gás</button>');
   card.appendChild(btn);
   btn.onclick = function () { enviar(false); };
+  aplicarModo();
 
   async function enviar(horasConfirmadas) {
-    if (!selResp.getValue()) { toast('Selecione o responsável', true); return; }
     if (!selEquip.getValue()) { toast('Selecione a frota', true); return; }
     if (!horimetro.getValue()) { toast('Informe o horímetro', true); return; }
+    if (ehEletrica()) { enviarCarregamento(); return; }
     if (!selFornecedor || !selFornecedor.getValue()) { toast('Selecione o fornecedor', true); return; }
     const horas = horasCalculadas();
     if (!horasConfirmadas && horas !== null && horas > LIMITE_HORAS_ENTRE_TROCAS) {
@@ -2820,7 +2837,7 @@ async function renderTrocaGasForm() {
         unidade: S.unidade.UNIDADE,
         idUsuario: S.usuario.ID_USUARIO,
         idEquipamento: selEquip.getValue(),
-        responsavel: selResp.getValue(),
+        responsavel: S.usuario.NOME,
         horimetro: horimetro.getValue(),
         fornecedor: selFornecedor.getValue(),
         quantidadeKg: kg.getValue(),
@@ -2839,6 +2856,29 @@ async function renderTrocaGasForm() {
       if (!horasConfirmadas && e && e.message && e.message.indexOf('Verifique o horímetro') === 0) {
         pedirConfirmacaoHoras(e.message.replace(/^Verifique o horímetro:?\s*/, ''));
       }
+    }
+  }
+
+  async function enviarCarregamento() {
+    const h = horasCalculadas();
+    if (h !== null && h < 0) { toast('O horímetro não pode ser menor que o da última carga (' + ultimaTroca.HORIMETRO + ')', true); return; }
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      const res = await api('createCarregamento', {
+        unidade: S.unidade.UNIDADE,
+        idUsuario: S.usuario.ID_USUARIO,
+        idEquipamento: selEquip.getValue(),
+        responsavel: S.usuario.NOME,
+        horimetro: horimetro.getValue()
+      });
+      let msg = 'Carregamento ' + res.idCarregamento + ' registrado!';
+      if (res.horasOperacao !== null && res.horasOperacao !== undefined) {
+        msg += ' · ' + String(res.horasOperacao).replace('.', ',') + 'h desde a última carga desta frota.';
+      }
+      toast(msg, false, true);
+      go('painel');
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '🔋 Registrar carregamento';
     }
   }
 }
@@ -3507,6 +3547,17 @@ async function renderEquipamentoForm() {
     })
   });
 
+  // [OUT/2026] Motorização: máquina a combustão registra troca de gás;
+  // elétrica registra carregamento de bateria (mesma tela, no menu Gás).
+  const selMotor = choiceField(card, {
+    label: 'Motorização', required: true,
+    value: editando ? (String(e.MOTORIZACAO || '').toLowerCase() === 'eletrica' ? 'eletrica' : 'combustao') : 'combustao',
+    options: [
+      { value: 'combustao', label: '⛽ Combustão (gás)' },
+      { value: 'eletrica', label: '🔋 Elétrica (bateria)' }
+    ]
+  });
+
   const selStatus = selectField(card, {
     label: 'Status', semVazio: true,
     value: editando ? e.STATUS : 'em_uso',
@@ -3535,6 +3586,7 @@ async function renderEquipamentoForm() {
       codigo: codigo.getValue(),
       tipo: tipoFinal,
       setor: selSetor.getValue(),
+      motorizacao: selMotor.getValue() || 'combustao',
       status: selStatus.getValue(),
       observacoes: obs.getValue()
     };
@@ -4149,9 +4201,66 @@ async function renderRelatorioGas() {
     body.innerHTML = '';
     if (!r) return;
     montarRelatorioGas(body, r, load);
+    montarCarregamentos(body, p, load);
   }
   load();
 }
+
+// Carregamentos de bateria das máquinas elétricas no mesmo período —
+// um cartão só, no fim do Relatório de Gás.
+async function montarCarregamentos(body, p, recarregar) {
+  const lista = await api('getCarregamentos', {
+    unidade: S.unidade.UNIDADE, periodo: p.periodo, dataInicio: p.dataInicio, dataFim: p.dataFim
+  }).catch(function () { return null; });
+  if (!lista || !lista.length || !body.isConnected) return;
+  const card = el('<div class="card stack"><h3 class="title-lg">🔋 Carregamentos de bateria</h3></div>');
+  const porFrota = {};
+  lista.forEach(function (c) {
+    const k = String(c.ID_EQUIPAMENTO);
+    if (!porFrota[k]) porFrota[k] = { nome: c.NOME_EQUIPAMENTO, cargas: 0, horas: 0, comHoras: 0 };
+    porFrota[k].cargas++;
+    if (temValorCampo(c.HORAS_OPERACAO)) { porFrota[k].horas += Number(c.HORAS_OPERACAO) || 0; porFrota[k].comHoras++; }
+  });
+  card.appendChild(el('<p class="subtle" style="margin-top:-6px">' + lista.length + ' carregamento(s) no período · horas médias de uso entre uma carga e outra</p>'));
+  Object.keys(porFrota).map(function (k) { return porFrota[k]; }).sort(function (a, b) { return b.cargas - a.cargas; }).forEach(function (f) {
+    card.appendChild(el('<div class="row between" style="gap:10px;font-size:13.5px;padding:6px 0;border-bottom:1px solid var(--line)">' +
+      '<span>' + escapeHtml(f.nome) + '</span><span class="subtle">' + f.cargas + ' carga(s)' +
+      (f.comHoras ? ' · ' + String(Math.round(f.horas / f.comHoras * 10) / 10).replace('.', ',') + 'h entre cargas' : '') + '</span></div>'));
+  });
+  const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar carregamentos em CSV</button>');
+  btnCsv.onclick = function () { downloadCSV(nomeArquivo('carregamentos_bateria', 'csv'), COLUNAS_CARREGAMENTO, lista); };
+  card.appendChild(btnCsv);
+  if (ehAdmin()) {
+    const boxEx = el('<div class="stack" style="gap:8px;padding-top:12px;border-top:1px solid var(--line)">' +
+      '<strong style="font-size:14.5px">Excluir carregamento lançado incorretamente</strong>' +
+      '<div class="field"><select><option value="">Selecione o carregamento…</option></select></div></div>');
+    const sel = boxEx.querySelector('select');
+    lista.forEach(function (c) {
+      sel.appendChild(el('<option value="' + escapeHtml(c.ID_CARREGAMENTO) + '">' + escapeHtml(c.ID_CARREGAMENTO) + ' · ' +
+        escapeHtml(c.NOME_EQUIPAMENTO) + ' · ' + fmtDataHora(c.DATA_HORA) + ' · ' + escapeHtml(c.RESPONSAVEL || '—') + '</option>'));
+    });
+    const btnEx = el('<button class="btn btn--danger btn--block">🗑 Excluir carregamento</button>');
+    boxEx.appendChild(btnEx);
+    btnEx.onclick = async function () {
+      if (!sel.value) { toast('Selecione o carregamento', true); return; }
+      if (!window.confirm('Excluir o carregamento ' + sel.options[sel.selectedIndex].textContent + '?\n\nEsta ação não pode ser desfeita.')) return;
+      btnEx.disabled = true; btnEx.textContent = 'Excluindo…';
+      try {
+        await api('deleteCarregamento', { idCarregamento: sel.value, idUsuario: S.usuario.ID_USUARIO });
+        toast('Carregamento excluído.', false, true);
+        recarregar();
+      } catch (e) { btnEx.disabled = false; btnEx.textContent = '🗑 Excluir carregamento'; }
+    };
+    card.appendChild(boxEx);
+  }
+  body.appendChild(card);
+}
+
+const COLUNAS_CARREGAMENTO = [
+  ['ID_CARREGAMENTO', 'ID'], ['NOME_EQUIPAMENTO', 'Frota'], ['RESPONSAVEL', 'Responsável'],
+  ['HORIMETRO', 'Horímetro'], ['HORIMETRO_ANTERIOR', 'Horímetro anterior'], ['HORAS_OPERACAO', 'Horas de uso'],
+  ['DATA_HORA', 'Data/hora', function (v) { return fmtDataHora(v); }]
+];
 
 function montarRelatorioGas(body, r, recarregar) {
   const ind = r.indicadores;
