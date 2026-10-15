@@ -113,7 +113,9 @@ const ACOES_LENTAS_TIMEOUT_MS = {
   createChecklist: 70000,
   createLavagem: 70000,
   createManutencao: 70000,
-  gerarManutencaoPDF: 120000
+  gerarManutencaoPDF: 120000,
+  getPrestadores: 60000,
+  gerarPrestadoresPDF: 120000
 };
 
 // ------------------------- [ESTABILIDADE OUT/2026] REDE -------------------------
@@ -131,7 +133,7 @@ const ACOES_LENTAS_TIMEOUT_MS = {
 // Na próxima vez, a tela aparece na hora com esses dados e a versão atual
 // chega em seguida. Sair do app apaga tudo.
 const ACOES_ABRIR_NA_HORA = ['getUnidades', 'getPainel', 'getManutencoes', 'getChecklists', 'getRelatorio', 'getRelatorioExecutivo',
-  'getRelatorioGas', 'getVisaoGeralUnidades', 'getComparativoUnidades', 'getLavagens', 'getHistorico', 'getNaoConformidades', 'getCarregamentos'];
+  'getRelatorioGas', 'getVisaoGeralUnidades', 'getComparativoUnidades', 'getLavagens', 'getHistorico', 'getNaoConformidades', 'getCarregamentos', 'getPrestadores'];
 const PREFIXO_CACHE_LOCAL = 'cf_v1|';
 const VALIDADE_CACHE_LOCAL_MS = 7 * 86400000;
 let ULTIMA_INTERACAO = 0, TELA_MONTADA_EM = 0, AVISO_DADOS_TIMER = null, ULTIMA_GRAVACAO = 0;
@@ -1029,6 +1031,7 @@ const SCREENS = {
   equipamentoForm: renderEquipamentoForm,
 
   naoConformidades: renderNaoConformidades,
+  prestadores: renderPrestadores,
   relatorios: renderRelatorios,
   relatorioGas: renderRelatorioGas,
   relatorioExecutivo: renderRelatorioExecutivo,
@@ -1046,7 +1049,6 @@ const TAB_PAI = {
   manutencaoDetalhe: 'manutencoes',
   equipamentoForm: 'equipamentos',
   equipamentos: 'mais',
-  naoConformidades: 'mais',
   configuracoes: 'mais',
   perguntas: 'mais',
   horasRodadas: 'mais'
@@ -1055,7 +1057,7 @@ const TAB_PAI = {
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
 // "mais" NÃO entra aqui: o Operador também acessa (Preventivas/Histórico),
 // só que com um conteúdo diferente — ver renderMais().
-const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'horasRodadas', 'visaoGeral'];
+const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'prestadores', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'horasRodadas', 'visaoGeral'];
 
 function render() {
   // [ESTABILIDADE OUT/2026] Cada troca de tela ganha um número; as leituras
@@ -1141,9 +1143,12 @@ function updateChrome() {
     ? [
         { s: 'painel', ic: '📊', label: 'Painel' },
         { s: 'manutencoes', ic: '🔧', label: 'Manutenções' },
+        { s: 'naoConformidades', ic: '⚠️', label: 'Não conformidades' },
+        { s: 'prestadores', ic: '🛠️', label: 'Prestadores' },
         { s: 'relatorios', ic: '📈', label: 'Resumo' },
         { s: 'relatorioExecutivo', ic: '📊', label: 'Executivo' },
         { s: 'relatorioGas', ic: '⛽', label: 'Gás' },
+        { s: 'preventivas', ic: '🗓️', label: 'Preventivas' },
         { s: 'mais', ic: '☰', label: 'Mais' }
       ]
     : [
@@ -3087,7 +3092,132 @@ async function renderManutencoes() {
 
     // Comparativo dos prestadores de serviço (só Admin), com o período e
     // os filtros escolhidos — todas as etapas, não só a aba aberta.
-    if (ehAdmin()) montarComparativoPrestadores(body, lista);
+    if (ehAdmin()) {
+      const btnPrest = el('<button class="btn btn--outline btn--block" style="margin-top:6px">🛠️ Ver comparativo dos prestadores de serviço</button>');
+      btnPrest.onclick = function () { go('prestadores'); };
+      body.appendChild(btnPrest);
+    }
+  }
+  load();
+}
+
+// ------------------------- [OUT/2026 — 15/10] PRESTADORES (ADMIN) -------------------------
+// Comparativo entre as empresas: quem atende rápido, quem resolve de
+// primeira (sem o mesmo defeito voltar) e a classificação Bom / Mediano /
+// Ruim. O PDF leva o mesmo comparativo.
+const CLASSE_PRESTADOR = {
+  bom: { cor: 'var(--st-ok, #2F9E64)', fundo: 'rgba(47,158,100,.12)', ic: '🟢' },
+  mediano: { cor: '#B8661A', fundo: 'rgba(223,134,48,.14)', ic: '🟡' },
+  ruim: { cor: 'var(--st-risco, #D64545)', fundo: 'rgba(214,69,69,.12)', ic: '🔴' },
+  sem_dados: { cor: 'var(--ink-soft)', fundo: 'rgba(107,114,128,.12)', ic: '⚪' }
+};
+
+async function renderPrestadores() {
+  appendHtml(app, screenHeader('Prestadores', 'Prestadores de serviço', 'Comparativo entre as empresas que atendem ' + unidadeSetorLabel()));
+  const topo = el('<div class="stack" style="gap:8px"></div>');
+  app.appendChild(topo);
+  const periodo = filtroPeriodo(topo, { comTodos: true, value: 'todos', onChange: function () { load(); } });
+  const btnPdf = el('<button class="btn btn--accent btn--block">📄 Baixar PDF comparativo dos prestadores</button>');
+  topo.appendChild(btnPdf);
+  btnPdf.onclick = async function () {
+    const per = periodo.getValue();
+    btnPdf.disabled = true; btnPdf.textContent = 'Gerando PDF…';
+    try {
+      const res = await api('gerarPrestadoresPDF', { unidade: S.unidade.UNIDADE, periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim });
+      downloadBase64File(res.filename, res.base64, 'application/pdf');
+      toast('PDF dos prestadores baixado!', false, true);
+    } catch (e) { /* toast já mostrado */ }
+    btnPdf.disabled = false; btnPdf.textContent = '📄 Baixar PDF comparativo dos prestadores';
+  };
+  const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando…</p></div>');
+  app.appendChild(body);
+
+  async function load() {
+    body.innerHTML = '<p class="subtle">Carregando…</p>';
+    const per = periodo.getValue();
+    const d = await api('getPrestadores', { unidade: S.unidade.UNIDADE, periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim })
+      .catch(function () { return null; });
+    body.innerHTML = '';
+    if (!d) { body.appendChild(el(blocoFalhaCarregar())); return; }
+    if (!d.prestadores.length) {
+      body.appendChild(el(vazio('🛠️', 'Nenhum chamado com prestador informado neste período. O prestador é informado ao acionar o técnico.')));
+      return;
+    }
+
+    // Visão de cima: quantos bons, medianos e ruins + ranking.
+    body.appendChild(el('<div class="kpi-grid">' +
+      kpi(d.resumo.bom, '🟢 Bom', 'kpi--uso') + kpi(d.resumo.mediano, '🟡 Mediano', 'kpi--manut') +
+      kpi(d.resumo.ruim, '🔴 Ruim', 'kpi--parado') + kpi(d.mediaGeralAcionFimTexto, 'Média geral: acionamento → fim', 'kpi--accent') +
+    '</div>'));
+    const ranking = el('<div class="card stack"><h3 class="title-lg">🏁 Ranking das empresas</h3>' +
+      '<p class="subtle" style="margin-top:-6px">Da melhor para a pior. Toque numa empresa para ir ao detalhe.</p></div>');
+    body.appendChild(ranking);
+    const maxAF = Math.max.apply(null, d.prestadores.map(function (p) { return p.acionFimMs || 0; }).concat([1]));
+    d.prestadores.forEach(function (p, i) {
+      const c = CLASSE_PRESTADOR[p.classe];
+      const linha = el('<div class="stack" style="gap:4px;padding:8px 10px;border-radius:10px;background:' + c.fundo + ';cursor:pointer">' +
+        '<div class="row between" style="gap:8px"><strong style="font-size:14px">' + (p.posicao ? p.posicao + 'º ' : '— ') + escapeHtml(p.nome) + '</strong>' +
+        '<span style="font-weight:700;color:' + c.cor + ';font-size:13px">' + c.ic + ' ' + escapeHtml(p.classeTexto) + '</span></div>' +
+        '<div class="bar-row"><span class="label" style="width:120px">Acionamento → fim</span><div class="bar-track">' +
+          (p.acionFimMs !== null ? '<div class="bar-fill" style="width:' + Math.max(4, p.acionFimMs / maxAF * 100) + '%"></div>' : '') + '</div>' +
+          '<span class="bar-val" style="width:auto;min-width:74px">' + escapeHtml(p.acionFimTexto) + '</span></div>' +
+        '<div class="subtle" style="font-size:12.5px">' + p.chamados + ' manutenção(ões) · ' + p.recorrencias + ' recorrência(s)</div>' +
+      '</div>');
+      linha.onclick = function () { const alvo = document.getElementById('prest_' + i); if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+      ranking.appendChild(linha);
+    });
+    ranking.appendChild(el('<p class="subtle" style="font-size:12px">As empresas são colocadas em ordem pelo <strong>tempo do acionamento até o fim</strong> ' +
+      'e pela <strong>recorrência</strong> (menor é melhor nos dois); a soma das posições define: a melhor é <strong>Bom</strong>, ' +
+      'a do meio é <strong>Mediano</strong> e a pior é <strong>Ruim</strong>. <strong>Recorrência</strong>: o mesmo defeito voltou na mesma máquina ' +
+      'depois do serviço — conta para a empresa que mexeu por último, mesmo que a volta seja atendida por outra. Tempo corrido.</p>'));
+
+    // Plano de ação montado pelos números.
+    if (d.plano && d.plano.length) {
+      const cardPlano = el('<div class="card stack"><h3 class="title-lg">📋 Plano de ação</h3></div>');
+      d.plano.forEach(function (a) {
+        cardPlano.appendChild(el('<div class="list-item ' + (a.prioridade === 'Alta' ? 'is-warn' : '') + '" style="cursor:default"><div class="list-item__body">' +
+          '<div class="list-item__title">' + escapeHtml(a.empresa) + ' <span class="tag ' + (a.prioridade === 'Alta' ? 'tag--aberta' : 'tag--na') + '">' + escapeHtml(a.prioridade) + '</span></div>' +
+          '<div class="list-item__sub">' + escapeHtml(a.acao) + '</div></div></div>'));
+      });
+      body.appendChild(cardPlano);
+    }
+
+    // Ficha de cada empresa.
+    d.prestadores.forEach(function (p, i) {
+      const c = CLASSE_PRESTADOR[p.classe];
+      const pctRec = p.taxaRecorrenciaPct === null ? '' : ' (' + String(p.taxaRecorrenciaPct).replace('.', ',') + '%)';
+      const ficha = el('<div class="card stack" id="prest_' + i + '" style="border-left:5px solid ' + c.cor + ';gap:10px"></div>');
+      appendHtml(ficha,
+        '<div class="row between" style="gap:8px;align-items:center">' +
+          '<div><span class="subtle" style="font-size:12px">Empresa</span><h3 class="title-lg" style="margin:0">' + escapeHtml(p.nome) + '</h3></div>' +
+          '<span style="padding:4px 10px;border-radius:999px;background:' + c.fundo + ';color:' + c.cor + ';font-weight:700;font-size:13px">' + c.ic + ' ' + escapeHtml(p.classeTexto) + '</span>' +
+        '</div>' +
+        '<p class="subtle" style="margin-top:-4px;font-size:12.5px">' + escapeHtml(p.motivo) + '</p>' +
+        '<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">' +
+          kpi(p.acionInicioTexto, 'Acionamento → início (média)') +
+          kpi(p.inicioFimTexto, 'Início → fim (média)') +
+          kpi(p.acionFimTexto, 'Acionamento → fim (média)', 'kpi--accent') +
+        '</div>' +
+        '<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">' +
+          kpi(p.chamados, 'Quantas manutenções') +
+          kpi(p.recorrencias + pctRec, 'Mesmo defeito recorrente', p.recorrencias ? 'kpi--parado' : '') +
+          kpi(p.semRecorrencia, 'Realizadas sem recorrência', 'kpi--uso') +
+        '</div>' +
+        linhaInfo('Frotas atendidas', escapeHtml(p.frotas.join(', '))) +
+        (p.emAberto ? linhaInfo('Em aberto agora', '<strong>' + p.emAberto + '</strong>') : '')
+      );
+      if (p.recorrentes.length) {
+        ficha.appendChild(el('<h4 style="font-size:13.5px">🔁 Defeitos que voltaram</h4>'));
+        p.recorrentes.forEach(function (r) {
+          ficha.appendChild(el('<div class="list-item is-warn" style="cursor:default"><div class="list-item__body">' +
+            '<div class="list-item__title">' + escapeHtml(r.frota) + ' · ' + escapeHtml(r.problema) + '</div>' +
+            '<div class="list-item__sub">Serviço dela finalizado em ' + fmtDataHora(r.finalizadaEm) + ' · voltou ' + r.diasDepois + ' dia(s) depois (' +
+              escapeHtml(r.idVoltou) + ', atendido por ' + escapeHtml(r.atendidoPor || '—') + ')</div>' +
+          '</div></div>'));
+        });
+      }
+      body.appendChild(ficha);
+    });
   }
   load();
 }
@@ -3548,7 +3678,9 @@ async function renderManutencaoForm() {
         payload.idEquipamento = selEquip.getValue();
         const criada = await api('createManutencao', payload);
         toast('Manutenção ' + criada.ID_MANUTENCAO + ' aberta!', false, true);
-        go('manutencoes');
+        // Mostra o chamado recém-criado na hora (já veio na resposta), sem
+        // esperar a lista recarregar.
+        go('manutencaoDetalhe', { manutencaoAtual: criada, voltarPara: 'manutencoes' });
       }
     } catch (e) {
       btn.disabled = false; btn.textContent = editando ? '✓ Salvar alterações' : '✓ Abrir manutenção';
@@ -4208,9 +4340,9 @@ async function renderNaoConformidades() {
     const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
     btnCsv.onclick = function () { downloadCSV(nomeArquivo('nao_conformidades', 'csv'), COLUNAS_NC, lista); };
     body.appendChild(btnCsv);
-    body.appendChild(el('<p class="subtle">' + lista.length + ' não conformidade(s)</p>'));
+    body.appendChild(el('<p class="subtle">' + lista.length + ' não conformidade(s) · toque na máquina para ver</p>'));
 
-    renderPaginado(body, lista, function (nc) {
+    function cardNc(nc) {
       const aberta = String(nc.STATUS) === 'aberta';
       // Depois que uma manutenção é aberta para a NC, o status dela
       // acompanha o chamado: manutenção aberta → técnico acionado → em
@@ -4277,7 +4409,46 @@ async function renderNaoConformidades() {
         card.appendChild(btnMan);
       }
       return card;
-    }, 10);
+    }
+
+    // [OUT/2026 — 15/10] Uma linha por máquina ("FROTA 02 · 2 NOK"); tocar
+    // abre as não conformidades dela.
+    const grupos = {};
+    lista.forEach(function (nc) {
+      const k = String(nc.ID_EQUIPAMENTO || nc.NOME_EQUIPAMENTO);
+      (grupos[k] = grupos[k] || { nome: nc.NOME_EQUIPAMENTO || k, itens: [] }).itens.push(nc);
+    });
+    const chaves = Object.keys(grupos).sort(function (a, b) {
+      const abertasA = grupos[a].itens.filter(function (n) { return String(n.STATUS) === 'aberta'; }).length;
+      const abertasB = grupos[b].itens.filter(function (n) { return String(n.STATUS) === 'aberta'; }).length;
+      return abertasB - abertasA || grupos[b].itens.length - grupos[a].itens.length || String(grupos[a].nome).localeCompare(String(grupos[b].nome));
+    });
+    const destaqueEquip = ncDestaque ? String((lista.find(function (n) { return String(n.ID_NC) === String(ncDestaque); }) || {}).ID_EQUIPAMENTO || '') : '';
+    chaves.forEach(function (k) {
+      const g = grupos[k];
+      const abertas = g.itens.filter(function (n) { return String(n.STATUS) === 'aberta'; }).length;
+      const fechadas = g.itens.length - abertas;
+      const grupo = el('<div class="stack" style="gap:8px"></div>');
+      const cab = el('<button type="button" class="list-item ' + (abertas ? 'is-warn' : 'is-ok') + '" style="width:100%;text-align:left;cursor:pointer">' +
+        '<span class="list-item__body"><span class="list-item__title">' + escapeHtml(g.nome) + '</span>' +
+        '<span class="list-item__sub">' + (abertas ? abertas + ' NOK em aberto' : 'Nenhuma em aberto') + (fechadas ? ' · ' + fechadas + ' fechada(s)' : '') + '</span></span>' +
+        '<span class="row" style="gap:8px;align-items:center">' + (abertas ? '<span class="tag tag--aberta">' + abertas + ' NOK</span>' : '') +
+        '<span class="seta" style="font-size:18px">▸</span></span></button>');
+      const conteudo = el('<div class="stack" style="gap:10px;padding-left:6px" hidden></div>');
+      let montado = false;
+      function alternar(abrir) {
+        const vaiAbrir = abrir === undefined ? conteudo.hidden : abrir;
+        if (vaiAbrir && !montado) { g.itens.forEach(function (nc) { conteudo.appendChild(cardNc(nc)); }); montado = true; }
+        conteudo.hidden = !vaiAbrir;
+        cab.querySelector('.seta').textContent = vaiAbrir ? '▾' : '▸';
+      }
+      cab.onclick = function () { alternar(); };
+      grupo.appendChild(cab);
+      grupo.appendChild(conteudo);
+      body.appendChild(grupo);
+      if (chaves.length === 1 || (destaqueEquip && destaqueEquip === String(g.itens[0].ID_EQUIPAMENTO)) ||
+          (selEquip.value && String(selEquip.value) === String(g.itens[0].ID_EQUIPAMENTO))) alternar(true);
+    });
   }
   load();
 }
@@ -5193,8 +5364,6 @@ function renderMais() {
     '<div class="stack" id="maisLista">' +
       menuCard('🚜', 'Equipamentos', 'Cadastrar, editar status e excluir', 'equipamentos') +
       menuCard('✅', 'Checklists realizados', 'Consultar os checklists feitos pelos operadores', 'checklists') +
-      menuCard('⚠️', 'Não conformidades', 'Acompanhar e fechar o que veio do checklist', 'naoConformidades') +
-      menuCard('🗓️', 'Preventivas', 'Agenda de manutenções preventivas', 'preventivas') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
       menuCard('⏱️', 'Horas rodadas', 'Tempo que cada máquina rodou, pelo horímetro do checklist', 'horasRodadas') +
       menuCard('📝', 'Perguntas', 'Perguntas do checklist e da lavagem, por tipo de equipamento', 'perguntas') +

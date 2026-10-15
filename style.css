@@ -126,8 +126,11 @@ input,select,textarea{font-family:inherit;font-size:16px}
   display:flex;background:var(--chrome);border-top:1px solid var(--chrome-line);
   box-shadow:0 -6px 20px rgba(15,23,42,.22);
   padding-bottom:env(safe-area-inset-bottom);
+  overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;
 }
+.tabbar::-webkit-scrollbar{display:none}
 .tabbar button{
+  min-width:66px;
   flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
   padding:9px 2px 10px;background:none;border:none;color:var(--chrome-ink-soft);
   font-size:10.5px;font-weight:600;cursor:pointer;line-height:1.2;position:relative;
