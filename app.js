@@ -126,6 +126,69 @@ const ACOES_LENTAS_TIMEOUT_MS = {
 //    dados), queda de rede ou servidor ocupado: o app tenta de novo sozinho
 //    antes de mostrar erro. Só leituras, criações e login são repetidos —
 //    criação tem proteção contra duplicidade, as outras gravações não.
+// ------------------------- [PERF 15/10] ABRIR NA HORA -------------------------
+// Telas de consulta guardam a última resposta no aparelho (por usuário).
+// Na próxima vez, a tela aparece na hora com esses dados e a versão atual
+// chega em seguida. Sair do app apaga tudo.
+const ACOES_ABRIR_NA_HORA = ['getUnidades', 'getPainel', 'getManutencoes', 'getChecklists', 'getRelatorio', 'getRelatorioExecutivo',
+  'getRelatorioGas', 'getVisaoGeralUnidades', 'getComparativoUnidades', 'getLavagens', 'getHistorico', 'getNaoConformidades', 'getCarregamentos'];
+const PREFIXO_CACHE_LOCAL = 'cf_v1|';
+const VALIDADE_CACHE_LOCAL_MS = 7 * 86400000;
+let ULTIMA_INTERACAO = 0, TELA_MONTADA_EM = 0, AVISO_DADOS_TIMER = null, ULTIMA_GRAVACAO = 0;
+['pointerdown', 'keydown', 'input'].forEach(function (ev) {
+  document.addEventListener(ev, function () { ULTIMA_INTERACAO = Date.now(); }, true);
+});
+
+function chaveCacheLocal(action, envio) {
+  const quem = S.usuario ? S.usuario.ID_USUARIO : '-';
+  return PREFIXO_CACHE_LOCAL + quem + '|' + action + '|' + JSON.stringify(flattenParams(envio || {}));
+}
+function lerCacheLocal(chave) {
+  try {
+    const bruto = localStorage.getItem(chave);
+    if (!bruto) return null;
+    const i = bruto.indexOf('|');
+    const em = Number(bruto.slice(0, i));
+    if (!em || Date.now() - em > VALIDADE_CACHE_LOCAL_MS) { localStorage.removeItem(chave); return null; }
+    return bruto.slice(i + 1);
+  } catch (e) { return null; }
+}
+function gravarCacheLocal(chave, texto) {
+  if (!texto || texto.length > 1500000) return;
+  try { localStorage.setItem(chave, Date.now() + '|' + texto); }
+  catch (e) {
+    // Aparelho sem espaço: limpa o que é nosso e tenta uma vez.
+    limparCacheLocal();
+    try { localStorage.setItem(chave, Date.now() + '|' + texto); } catch (e2) { /* segue sem guardar */ }
+  }
+}
+function limparCacheLocal() {
+  try {
+    Object.keys(localStorage).forEach(function (k) { if (k.indexOf(PREFIXO_CACHE_LOCAL) === 0) localStorage.removeItem(k); });
+  } catch (e) { /* sem armazenamento */ }
+}
+// Chegou versão nova dos dados da tela aberta.
+function avisarDadosNovos(geracao) {
+  clearTimeout(AVISO_DADOS_TIMER);
+  AVISO_DADOS_TIMER = setTimeout(function () {
+    if (geracao !== GERACAO_TELA) return;
+    if (ULTIMA_INTERACAO <= TELA_MONTADA_EM) {
+      const y = window.scrollY;
+      render();
+      setTimeout(function () { window.scrollTo(0, y); }, 60);
+      return;
+    }
+    if (document.getElementById('btnDadosNovos')) return;
+    const b = document.createElement('button');
+    b.id = 'btnDadosNovos';
+    b.className = 'btn btn--primary btn--sm';
+    b.textContent = '↻ Há dados novos — toque para atualizar';
+    b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:60;box-shadow:0 6px 18px rgba(0,0,0,.18)';
+    b.onclick = function () { b.remove(); render(); };
+    document.body.appendChild(b);
+  }, 250);
+}
+
 let GERACAO_TELA = 0;
 const LEITURAS_ABERTAS = [];
 const LEITURAS_EM_CURSO = {};
@@ -257,6 +320,7 @@ async function api(action, payload) {
 
   const timeoutMs = ACOES_LENTAS_TIMEOUT_MS[action] || API_TIMEOUT_MS;
   const podeRepetir = isRead || ehCriacao || ehLogin;
+  const chaveLocal = isRead && ACOES_ABRIR_NA_HORA.indexOf(action) > -1 ? chaveCacheLocal(action, envio) : null;
   // [PERF 15/10] Falha passageira (Google devolveu página de erro, rede
   // oscilou, servidor ocupado): tenta de novo com calma antes de mostrar
   // erro — antes desistia em ~5 s. Servidor ocupado não chegou a executar
@@ -287,6 +351,25 @@ async function api(action, payload) {
     }
   };
 
+  // [PERF 15/10] Já abriu esta tela antes neste aparelho: mostra na hora a
+  // última resposta guardada e busca a atual por baixo. Se mudou, a tela
+  // se atualiza sozinha (ou aparece o botão "Atualizar", se a pessoa já
+  // estiver mexendo nela).
+  // Logo depois de gravar algo, busca sempre o atual (para o que acabou de
+  // salvar aparecer na hora, sem mostrar a versão antiga antes).
+  const guardadoLocal = chaveLocal && Date.now() - ULTIMA_GRAVACAO > 90000 ? lerCacheLocal(chaveLocal) : null;
+  if (guardadoLocal) {
+    const emSegundoPlano = tentar().then(function (dados) { return JSON.stringify(dados === undefined ? null : dados); });
+    LEITURAS_EM_CURSO[geracao + '|' + chaveLeitura] = emSegundoPlano;
+    emSegundoPlano.then(function (texto) {
+      MEMO_LEITURA[chaveLeitura] = { em: Date.now(), dados: texto };
+      gravarCacheLocal(chaveLocal, texto);
+      if (texto !== guardadoLocal && geracao === GERACAO_TELA) avisarDadosNovos(geracao);
+    }, function () { /* sem rede: fica o que já está na tela */ })
+      .then(function () { delete LEITURAS_EM_CURSO[geracao + '|' + chaveLeitura]; });
+    return JSON.parse(guardadoLocal);
+  }
+
   let promessaTexto = null;
   if (isRead) {
     // Guarda o resultado como texto: cada tela recebe a sua própria cópia.
@@ -300,6 +383,7 @@ async function api(action, payload) {
     if (isRead) {
       const texto = await promessaTexto;
       MEMO_LEITURA[chaveLeitura] = { em: Date.now(), dados: texto };
+      if (chaveLocal) gravarCacheLocal(chaveLocal, texto);
       // Chegou, mas a pessoa já trocou de tela: fica guardado para a próxima
       // vez e não mexe na tela atual.
       if (geracao !== GERACAO_TELA) return NUNCA();
@@ -307,7 +391,7 @@ async function api(action, payload) {
     } else {
       dados = await tentar();
       // Gravou alguma coisa: nada do que estava guardado vale mais.
-      if (action.indexOf('gerar') !== 0) limparMemoLeitura();
+      if (action.indexOf('gerar') !== 0) { limparMemoLeitura(); ULTIMA_GRAVACAO = Date.now(); }
     }
     if (chaveReq) delete REQ_IDS[chaveReq];
     return dados;
@@ -357,6 +441,7 @@ const S = {
 
 function resetSession() {
   limparMemoLeitura();
+  limparCacheLocal();
   S.unidade = null;
   S.setor = null;
   S.cargo = null;
@@ -976,6 +1061,9 @@ function render() {
   // [ESTABILIDADE OUT/2026] Cada troca de tela ganha um número; as leituras
   // da tela anterior são canceladas (ver cancelarLeiturasDaTelaAnterior).
   GERACAO_TELA++;
+  TELA_MONTADA_EM = Date.now();
+  const avisoVelho = document.getElementById('btnDadosNovos');
+  if (avisoVelho) avisoVelho.remove();
   cancelarLeiturasDaTelaAnterior();
   const geracao = GERACAO_TELA;
   app.innerHTML = '';
@@ -2899,13 +2987,11 @@ async function renderManutencoes() {
   const titulo = ehAdmin() ? 'Manutenções' : 'Abertura de manutenção';
   appendHtml(app, screenHeader(titulo, titulo, 'Corretivas e preventivas da unidade ' + S.unidade.UNIDADE));
 
-  // [OUT/2026] Quem abre o chamado é o Operador. O Administrador acompanha
-  // e move o status (técnico acionado → em andamento → finalizada).
-  if (!ehAdmin()) {
-    const btnNova = el('<button class="btn btn--primary btn--block">＋ Nova manutenção</button>');
-    btnNova.onclick = function () { go('manutencaoForm', { manutencaoAtual: null }); };
-    app.appendChild(btnNova);
-  }
+  // [OUT/2026] O Operador abre o chamado; o Administrador também pode abrir
+  // (caso o operador não tenha aberto) e é quem move o status.
+  const btnNova = el('<button class="btn btn--primary btn--block">＋ ' + (ehAdmin() ? 'Abrir manutenção' : 'Nova manutenção') + '</button>');
+  btnNova.onclick = function () { go('manutencaoForm', { manutencaoAtual: null }); };
+  app.appendChild(btnNova);
 
   const filtros = el(
     '<div class="filters" style="margin-top:12px">' +
@@ -3105,6 +3191,23 @@ function campoComSugestoes(container, opts, sugestoes) {
   return campo;
 }
 
+// [OUT/2026 — 15/10] Lista do problema na abertura do chamado: primeiro a
+// categoria, depois a subcategoria. Alimenta o PDF do técnico e a análise
+// de causa raiz ("o que mais quebra").
+const CATEGORIAS_MANUTENCAO = {
+  'Elétrica': ['Bateria', 'Chicote / fiação', 'Painel / display', 'Luzes / farol', 'Buzina / alarme de ré', 'Motor de partida', 'Alternador', 'Fusível / relé', 'Carregador', 'Outro'],
+  'Motor': ['Não liga / falha na partida', 'Perda de força', 'Superaquecimento', 'Vazamento de óleo', 'Fumaça excessiva', 'Ruído anormal', 'Sistema de gás (GLP)', 'Correia', 'Outro'],
+  'Pneu / rodas': ['Pneu furado', 'Pneu desgastado', 'Roda danificada', 'Rolamento', 'Outro'],
+  'Hidráulico': ['Vazamento', 'Mangueira', 'Cilindro', 'Bomba hidráulica', 'Garfo não sobe / não desce', 'Outro'],
+  'Freio': ['Freio de serviço', 'Freio de estacionamento', 'Pastilha / lona', 'Outro'],
+  'Direção': ['Folga', 'Direção pesada', 'Outro'],
+  'Transmissão': ['Câmbio / marcha', 'Embreagem', 'Diferencial', 'Outro'],
+  'Torre / garfo': ['Corrente', 'Garfo', 'Torre / mastro', 'Inclinação', 'Outro'],
+  'Estrutura / cabine': ['Assento / cinto', 'Grade de proteção', 'Espelho', 'Lataria', 'Outro'],
+  'Lavadora / limpeza': ['Escova', 'Rodo', 'Aspiração', 'Tanque', 'Outro'],
+  'Outros': ['Outro']
+};
+
 // [OUT/2026 — 15/10] Causas raiz da manutenção (as mesmas do servidor).
 const CAUSAS_RAIZ = ['Desgaste natural', 'Falta de preventiva', 'Mau uso / operação', 'Falha elétrica', 'Falha hidráulica',
   'Falha mecânica / peça', 'Pneu / rodas', 'Bateria / carregamento', 'Acidente / impacto', 'Outros'];
@@ -3140,6 +3243,18 @@ function montarAnaliseManutencao(body, a) {
     });
   } else {
     card.appendChild(el('<p class="subtle">Nenhum chamado com prestador informado no período.</p>'));
+  }
+
+  // Falhas por categoria (lista da abertura)
+  if (a.categorias && a.categorias.length) {
+    card.appendChild(el('<h4 style="font-size:14px;margin-top:8px">🗂️ Falhas por categoria</h4>'));
+    const maxK = a.categorias[0].chamados || 1;
+    a.categorias.forEach(function (c) {
+      card.appendChild(el('<div class="stack" style="gap:2px"><div class="bar-row"><span class="label" style="width:130px">' + escapeHtml(c.categoria) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, c.chamados / maxK * 100) + '%"></div></div>' +
+        '<span class="bar-val" style="width:auto;min-width:92px">' + c.chamados + ' · ' + pct(c.pct) + '</span></div>' +
+        (c.subcategorias ? '<span class="subtle" style="font-size:12px;padding-left:140px">' + escapeHtml(c.subcategorias) + '</span>' : '') + '</div>'));
+    });
   }
 
   // Pareto da causa raiz
@@ -3212,6 +3327,9 @@ const COLUNAS_MANUTENCAO = [
   ['INICIADA_EM', 'Início da manutenção', fmtDataHora],
   ['CONCLUIDA_EM', 'Fim da manutenção', fmtDataHora],
   ['PRESTADOR', 'Prestador de serviço'],
+  ['CATEGORIA', 'Categoria'],
+  ['SUBCATEGORIA', 'Subcategoria'],
+  ['ABERTO_POR', 'Aberto por'],
   ['CAUSA_RAIZ', 'Causa raiz'],
   ['SOLUCAO', 'O que foi feito'],
   ['TEMPO_ACIONAMENTO_TEXTO', 'Abertura até acionamento'],
@@ -3252,13 +3370,40 @@ async function renderManutencaoForm() {
   });
   if (editando) selEquip.select.disabled = true; // o backend não troca o equipamento de uma manutenção
 
-  const tit = textField(card, { label: 'Título', required: true, value: editando ? m.TITULO : (pre.titulo || ''), placeholder: 'Ex: Troca de pastilha de freio' });
-
   const selTipo = selectField(card, {
     label: 'Tipo', required: true, semVazio: true,
     value: editando ? m.TIPO : 'corretiva',
     options: [{ value: 'corretiva', label: 'Corretiva' }, { value: 'preventiva', label: 'Preventiva' }]
   });
+
+  // [OUT/2026 — 15/10] Corretiva: o problema é escolhido em duas listas
+  // (categoria → subcategoria) e o título sai delas. Preventiva: título livre.
+  const catWrap = el('<div class="stack"></div>');
+  card.appendChild(catWrap);
+  const selCat = selectField(catWrap, {
+    label: 'Categoria do problema', required: true, placeholder: 'Escolha a categoria…',
+    value: editando ? (m.CATEGORIA || '') : '',
+    options: Object.keys(CATEGORIAS_MANUTENCAO).map(function (c) { return { value: c, label: c }; })
+  });
+  const subWrap = el('<div></div>');
+  catWrap.appendChild(subWrap);
+  let selSub = null;
+  function montarSub(valor) {
+    subWrap.innerHTML = '';
+    const c = selCat.getValue();
+    if (!c) return;
+    selSub = selectField(subWrap, {
+      label: 'Subcategoria (' + c + ')', required: true, placeholder: 'Escolha o que é…', value: valor || '',
+      options: CATEGORIAS_MANUTENCAO[c].map(function (x) { return { value: x, label: x }; })
+    });
+  }
+  selCat.select.addEventListener('change', function () { selSub = null; montarSub(''); });
+  montarSub(editando ? (m.SUBCATEGORIA || '') : '');
+
+  const titWrap = el('<div></div>');
+  card.appendChild(titWrap);
+  const tit = textField(titWrap, { label: 'Título', required: true, value: editando ? m.TITULO : (pre.titulo || ''), placeholder: 'Ex: Revisão das 500 horas' });
+  function ehCorretiva() { return selTipo.getValue() === 'corretiva'; }
 
   const selPrio = selectField(card, {
     label: 'Prioridade', required: true, semVazio: true,
@@ -3273,11 +3418,19 @@ async function renderManutencaoForm() {
     value: editando ? paraInputDate(m.DATA_PREVISTA) : '',
     hint: 'Obrigatória para manutenção preventiva'
   });
-  function atualizarPrevista() { prevWrap.hidden = selTipo.getValue() !== 'preventiva'; }
+  function atualizarPrevista() {
+    prevWrap.hidden = selTipo.getValue() !== 'preventiva';
+    catWrap.hidden = !ehCorretiva();
+    // Chamado antigo (sem categoria) continua editável pelo título.
+    titWrap.hidden = ehCorretiva() && !(editando && !m.CATEGORIA);
+  }
   selTipo.select.onchange = atualizarPrevista;
   atualizarPrevista();
 
-  const desc = textField(card, { label: 'Descrição', multiline: true, value: editando ? m.DESCRICAO : (pre.descricao || '') });
+  const descInicial = editando ? m.DESCRICAO
+    : ((pre.titulo ? 'Item do checklist: ' + pre.titulo + '. ' : '') + (pre.descricao || ''));
+  const desc = textField(card, { label: 'Descrição do problema', multiline: true, value: descInicial,
+    placeholder: 'Conte o que aconteceu: o que a máquina faz, desde quando, em que situação' });
 
   // Horímetro da máquina na abertura do chamado — opcional.
   let horManut = null;
@@ -3348,7 +3501,11 @@ async function renderManutencaoForm() {
   card.appendChild(btn);
   btn.onclick = async function () {
     if (!selEquip.getValue()) { toast('Selecione o equipamento', true); return; }
-    if (!tit.getValue()) { toast('Informe o título da manutenção', true); return; }
+    if (ehCorretiva()) {
+      if (!selCat.getValue()) { toast('Escolha a categoria do problema', true); return; }
+      if (!selSub || !selSub.getValue()) { toast('Escolha a subcategoria do problema', true); return; }
+      if (!editando && !desc.getValue()) { toast('Descreva o problema', true); return; }
+    } else if (!tit.getValue()) { toast('Informe o título da manutenção', true); return; }
     if (selTipo.getValue() === 'preventiva' && !dtPrevista.getValue()) {
       toast('Informe a data prevista da preventiva', true); return;
     }
@@ -3358,7 +3515,10 @@ async function renderManutencaoForm() {
     }
     const payload = {
       idUsuario: S.usuario.ID_USUARIO,
-      titulo: tit.getValue(),
+      titulo: ehCorretiva() ? selCat.getValue() + ' · ' + selSub.getValue() : tit.getValue(),
+      categoria: ehCorretiva() ? selCat.getValue() : '',
+      subcategoria: ehCorretiva() ? selSub.getValue() : '',
+      abertoPor: editando ? undefined : S.usuario.NOME,
       tipo: selTipo.getValue(),
       prioridade: selPrio.getValue(),
       descricao: desc.getValue(),
@@ -3409,6 +3569,8 @@ function renderManutencaoDetalhe() {
     linhaInfo('Prioridade', tagPrioridade(m.PRIORIDADE)) +
     (m.HORIMETRO !== undefined && m.HORIMETRO !== null && m.HORIMETRO !== '' ? linhaInfo('Horímetro na abertura', '<span class="mono">' + escapeHtml(m.HORIMETRO) + '</span>') : '') +
     linhaInfo('Frota', '<strong>' + escapeHtml(m.NOME_EQUIPAMENTO) + '</strong>') +
+    (m.CATEGORIA ? linhaInfo('Problema', '<strong>' + escapeHtml(m.CATEGORIA) + '</strong>' + (m.SUBCATEGORIA ? ' · ' + escapeHtml(m.SUBCATEGORIA) : '')) : '') +
+    (m.ABERTO_POR ? linhaInfo('Aberto por', escapeHtml(m.ABERTO_POR)) : '') +
     (m.PRESTADOR ? linhaInfo('Prestador de serviço', '<strong>' + escapeHtml(m.PRESTADOR) + '</strong>') : '') +
     (m.CAUSA_RAIZ ? linhaInfo('Causa raiz', '<strong>' + escapeHtml(m.CAUSA_RAIZ) + '</strong>') : '') +
     (m.DATA_PREVISTA ? linhaInfo('Data prevista', fmtData(m.DATA_PREVISTA)) : '')
@@ -4199,31 +4361,6 @@ function montarRelatorio(body, r, filtroAtual) {
 
   // ---- [OUT/2026 — 15/10] Causa raiz e prestadores ----
   montarAnaliseManutencao(body, r.analise);
-
-  // ---- Por máquina ----
-  const hpm = (r.horasPorMaquina || []).slice();
-  cardResumo.appendChild(el('<h3 class="title-lg" style="font-size:15px;margin-top:6px">Por máquina</h3>'));
-  if (!hpm.length) {
-    cardResumo.appendChild(el('<p class="subtle">Nenhum equipamento ativo neste setor.</p>'));
-  } else {
-    const wrapTabela = el('<div style="overflow-x:auto"></div>');
-    wrapTabela.appendChild(tabelaHtml([
-      ['nomeEquipamento', 'Máquina'], ['operacaoTexto', 'Em operação'],
-      ['manutencaoTexto', 'Em manutenção'], ['paradoTexto', 'Parada'],
-      ['disponibilidadePct', 'Disponibilidade', pctTxt]
-    ], hpm));
-    cardResumo.appendChild(wrapTabela);
-    const btnCsvH = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
-    btnCsvH.onclick = function () {
-      downloadCSV(nomeArquivo('resumo_frota_por_maquina', 'csv'), [
-        ['nomeEquipamento', 'Máquina'], ['codigo', 'Código'], ['tipo', 'Tipo'],
-        ['operacaoTexto', 'Em operação (horímetro)'], ['trocasGas', 'Trocas de gás'],
-        ['manutencaoTexto', 'Em manutenção'], ['paradoTexto', 'Parada'],
-        ['disponibilidadePct', 'Disponibilidade (%)']
-      ], hpm);
-    };
-    cardResumo.appendChild(btnCsvH);
-  }
 
   // ---- Tempo médio de cada etapa do chamado ----
   const tm = r.temposMedios || {};
