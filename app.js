@@ -3604,13 +3604,13 @@ function renderManutencaoDetalhe() {
   function passo(numero, titulo, data, tempoRotulo, tempoTexto, etapaAnterior) {
     const feito = !!data;
     const correndo = !feito && emCurso === etapaAnterior;
-    return '<div class="list-item ' + (feito ? 'is-ok' : correndo ? 'is-warn' : '') + '" style="cursor:default">' +
+    return '<div class="list-item ' + (feito ? 'is-ok' : correndo ? 'is-warn' : '') + '" style="cursor:' + (ehAdmin() ? 'pointer' : 'default') + '">' +
       '<span><span class="list-item__title">' + numero + '. ' + titulo + '</span>' +
       '<div class="list-item__sub">' + (feito ? fmtDataHora(data) : correndo ? 'Aguardando…' : '—') +
       (tempoRotulo && tempoTexto && tempoTexto !== '—'
         ? ' · ' + tempoRotulo + ': <strong>' + escapeHtml(tempoTexto) + '</strong>' + (correndo ? ' até agora' : '') : '') +
       '</div></span>' +
-      '<span class="tag ' + (feito ? 'tag--ok' : 'tag--na') + '">' + (feito ? 'Feito' : correndo ? 'Em espera' : 'Pendente') + '</span>' +
+      '<span class="tag ' + (feito ? 'tag--ok' : 'tag--na') + '">' + (feito ? 'Feito' : correndo ? 'Em espera' : 'Pendente') + (ehAdmin() ? ' ✎' : '') + '</span>' +
     '</div>';
   }
   const linha = el('<div class="card stack"><h3 class="title-lg">🕒 Linha do tempo</h3></div>');
@@ -3633,6 +3633,54 @@ function renderManutencaoDetalhe() {
 
   // ---- Mudança de status: só o Administrador ----
   if (!ehAdmin()) return;
+
+  // [OUT/2026 — 15/10] Admin toca numa etapa da linha do tempo para
+  // corrigir a data/hora (ex.: chamado aberto no app depois do ocorrido).
+  // Etapa já feita: corrige a data. Etapa pendente: abre a mudança de status.
+  linha.appendChild(el('<p class="subtle" style="font-size:12.5px">Toque numa etapa para corrigir a data e a hora.</p>'));
+  const ETAPAS_LINHA = [
+    { campo: 'ABERTA_EM', chave: 'abertaEm', rotulo: 'Chamado aberto', status: 'aberta' },
+    { campo: 'ACIONADO_EM', chave: 'acionadoEm', rotulo: 'Técnico acionado', status: 'acionado' },
+    { campo: 'INICIADA_EM', chave: 'iniciadaEm', rotulo: 'Início da manutenção', status: 'andamento' },
+    { campo: 'CONCLUIDA_EM', chave: 'concluidaEm', rotulo: 'Fim da manutenção', status: 'concluida' }
+  ];
+  let editorAberto = null;
+  Array.prototype.slice.call(linha.querySelectorAll('.list-item')).slice(0, 4).forEach(function (item, i) {
+    const etapa = ETAPAS_LINHA[i];
+    item.onclick = function () {
+      if (editorAberto) { editorAberto.remove(); editorAberto = null; }
+      if (!m[etapa.campo]) {
+        // Etapa ainda não aconteceu: vai para a mudança de status com a data.
+        abrirConfirmacao(etapa.status);
+        acoes.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      const ed = el('<div class="card stack" style="border:1px dashed var(--brand);padding:12px"></div>');
+      const campo = textField(ed, { label: 'Corrigir: ' + etapa.rotulo, type: 'datetime-local', value: paraInputDateTime(m[etapa.campo]) });
+      ed.appendChild(el('<p class="subtle" style="font-size:12.5px;margin-top:-4px">A ordem precisa continuar: abertura → acionamento → início → fim. Os tempos são recalculados.</p>'));
+      const linhaBtns = el('<div class="row" style="gap:8px"></div>');
+      const salvar = el('<button class="btn btn--primary btn--sm">✓ Salvar</button>');
+      const cancelar = el('<button class="btn btn--outline btn--sm">Cancelar</button>');
+      linhaBtns.appendChild(salvar); linhaBtns.appendChild(cancelar);
+      ed.appendChild(linhaBtns);
+      cancelar.onclick = function (ev) { ev.stopPropagation(); ed.remove(); editorAberto = null; };
+      ed.onclick = function (ev) { ev.stopPropagation(); };
+      salvar.onclick = async function () {
+        if (!campo.getValue()) { toast('Informe a data e a hora', true); return; }
+        salvar.disabled = true; salvar.textContent = 'Salvando…';
+        const payload = { idManutencao: m.ID_MANUTENCAO, idUsuario: S.usuario.ID_USUARIO };
+        payload[etapa.chave] = inputDateTimeParaIso(campo.getValue());
+        try {
+          const atualizada = await api('updateManutencao', payload);
+          toast(etapa.rotulo + ': data corrigida.', false, true);
+          go('manutencaoDetalhe', { manutencaoAtual: atualizada });
+        } catch (e) { salvar.disabled = false; salvar.textContent = '✓ Salvar'; }
+      };
+      item.insertAdjacentElement('afterend', ed);
+      editorAberto = ed;
+      campo.input.focus();
+    };
+  });
 
   const acoes = el('<div class="card stack"><h3 class="title-lg">Atualizar status</h3></div>');
   app.appendChild(acoes);
