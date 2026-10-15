@@ -130,7 +130,7 @@ let GERACAO_TELA = 0;
 const LEITURAS_ABERTAS = [];
 const LEITURAS_EM_CURSO = {};
 const MEMO_LEITURA = {};
-const MEMO_LEITURA_MS = 20000;
+const MEMO_LEITURA_MS = 45000;
 let ULTIMA_FALHA_LEITURA = 0;
 const NUNCA = function () { return new Promise(function () {}); };
 function esperar(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
@@ -257,7 +257,11 @@ async function api(action, payload) {
 
   const timeoutMs = ACOES_LENTAS_TIMEOUT_MS[action] || API_TIMEOUT_MS;
   const podeRepetir = isRead || ehCriacao || ehLogin;
-  const pausas = [1200, 3000];
+  // [PERF 15/10] Falha passageira (Google devolveu página de erro, rede
+  // oscilou, servidor ocupado): tenta de novo com calma antes de mostrar
+  // erro — antes desistia em ~5 s. Servidor ocupado não chegou a executar
+  // nada, então qualquer ação pode repetir.
+  const pausas = [1000, 2500, 5000, 8000];
 
   const tentar = async function () {
     let repeticoesRede = 0, repeticoesTimeout = 0;
@@ -267,7 +271,7 @@ async function api(action, payload) {
       } catch (err) {
         if (err.tipo === 'cancelada') throw err;
         const falhaPassageira = err.tipo === 'rede' || err.tipo === 'resposta' || err.tipo === 'ocupado';
-        if (podeRepetir && falhaPassageira && repeticoesRede < pausas.length) {
+        if ((podeRepetir || err.tipo === 'ocupado') && falhaPassageira && repeticoesRede < pausas.length) {
           await esperar(pausas[repeticoesRede++]);
           if (isRead && geracao !== GERACAO_TELA) throw erroDeRede('cancelada', 'cancelada');
           continue;
@@ -1307,6 +1311,7 @@ async function renderVisaoGeralUnidades() {
     exec.appendChild(el('<h3 class="title-lg" style="margin-top:6px">📊 Executivo — todas as unidades · ' + escapeHtml(setorLabel(S.setor)) + '</h3>' +
       '<p class="subtle" style="margin-top:-6px">' + escapeHtml(r.periodo.label) + '</p>'));
     montarFrotasExecutivo(exec, r.frotas);
+    montarAnaliseManutencao(exec, r.analise);
   }
 
   // Comparativo de gás e manutenção entre as unidades, no período do filtro.
@@ -1433,7 +1438,7 @@ function montarComparativoUnidades(box, d) {
     ['Menos tempo em manutenção', function (m) { return maquina(m.menorTempo); }, 'manutencao', true]
   ];
   const cardTab = el('<div class="card stack"><h3 class="title-lg">📋 Lado a lado</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Todos os números, uma coluna por unidade. Tempo de manutenção conta só o expediente.</p></div>');
+    '<p class="subtle" style="margin-top:-6px">Todos os números, uma coluna por unidade. Tempo de manutenção é corrido (24h, todos os dias).</p></div>');
   let html = '<table class="report-table"><thead><tr><th>Indicador</th>' +
     us.map(function (u) { return '<th>' + escapeHtml(u.UNIDADE) + '</th>'; }).join('') + '<th>Todas</th></tr></thead><tbody>';
   linhas.forEach(function (l) {
@@ -3018,7 +3023,7 @@ function fmtMs(ms) {
 }
 
 // Quem atende mais rápido: tempo médio do acionamento até o técnico
-// começar, e duração média do serviço (só expediente), por prestador.
+// começar, e duração média do serviço (tempo corrido), por prestador.
 function montarComparativoPrestadores(body, lista) {
   const por = {};
   lista.forEach(function (m) {
@@ -3042,7 +3047,7 @@ function montarComparativoPrestadores(body, lista) {
   });
   const card = el('<div class="card stack" style="margin-top:6px"><h3 class="title-lg">🛠️ Prestadores de serviço</h3>' +
     '<p class="subtle" style="margin-top:-6px">Quem atende mais rápido no período: tempo médio do acionamento até o técnico começar ' +
-    '(e duração média do serviço). Conta só o expediente.</p></div>');
+    '(e duração média do serviço). Tempo corrido: 24h por dia, inclusive sábado, domingo e feriado.</p></div>');
   if (!itens.length) {
     card.appendChild(el('<p class="subtle">Nenhum chamado com prestador informado neste período. O prestador é informado ao acionar o técnico.</p>'));
     body.appendChild(card);
@@ -3100,6 +3105,99 @@ function campoComSugestoes(container, opts, sugestoes) {
   return campo;
 }
 
+// [OUT/2026 — 15/10] Causas raiz da manutenção (as mesmas do servidor).
+const CAUSAS_RAIZ = ['Desgaste natural', 'Falta de preventiva', 'Mau uso / operação', 'Falha elétrica', 'Falha hidráulica',
+  'Falha mecânica / peça', 'Pneu / rodas', 'Bateria / carregamento', 'Acidente / impacto', 'Outros'];
+
+// [OUT/2026 — 15/10] Análise de causa raiz e dos prestadores — usada no
+// Resumo geral, no Executivo da unidade e no Executivo de todas as unidades.
+function montarAnaliseManutencao(body, a) {
+  if (!a) return;
+  const pct = function (v) { return v === null || v === undefined ? '—' : String(v).replace('.', ',') + '%'; };
+  const card = el('<div class="card stack"><h3 class="title-lg">🔎 Causa raiz e atendimento</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Por que as máquinas param e quem resolve mais rápido. Tempo corrido (24h, todos os dias).</p></div>');
+  body.appendChild(card);
+
+  if (a.conclusoes && a.conclusoes.length) {
+    card.appendChild(el('<div class="note stack" style="gap:4px"><strong>O que os números apontam</strong>' +
+      a.conclusoes.map(function (c) { return '<span>• ' + escapeHtml(c) + '</span>'; }).join('') + '</div>'));
+  }
+
+  // Prestadores
+  card.appendChild(el('<h4 style="font-size:14px;margin-top:4px">🛠️ Prestadores de serviço</h4>'));
+  if (a.prestadores.length) {
+    const max = Math.max.apply(null, a.prestadores.map(function (p) { return p.chegadaMs || 0; }).concat([1]));
+    a.prestadores.forEach(function (p, i) {
+      card.appendChild(el(
+        '<div class="stack" style="gap:3px;padding:4px 0;border-bottom:1px solid var(--line)">' +
+          '<div class="row between" style="gap:10px"><strong style="font-size:13.5px">' + (i === 0 && p.chegadaMs !== null ? '🏆 ' : '') + escapeHtml(p.nome) + '</strong>' +
+          '<span class="subtle">' + p.chamados + ' chamado(s)</span></div>' +
+          '<div class="bar-row"><span class="label" style="width:100px">Até começar</span><div class="bar-track">' +
+            (p.chegadaMs !== null ? '<div class="bar-fill" style="width:' + Math.max(4, p.chegadaMs / max * 100) + '%"></div>' : '') + '</div>' +
+            '<span class="bar-val" style="width:auto;min-width:74px">' + escapeHtml(p.chegadaTexto) + '</span></div>' +
+          '<div class="subtle" style="font-size:12.5px">Serviço: ' + escapeHtml(p.servicoTexto) + ' · Chamado inteiro: ' + escapeHtml(p.totalTexto) + '</div>' +
+        '</div>'));
+    });
+  } else {
+    card.appendChild(el('<p class="subtle">Nenhum chamado com prestador informado no período.</p>'));
+  }
+
+  // Pareto da causa raiz
+  card.appendChild(el('<h4 style="font-size:14px;margin-top:8px">🧩 Causa raiz das falhas</h4>'));
+  if (a.causas.length) {
+    const maxC = a.causas[0].chamados || 1;
+    a.causas.forEach(function (c) {
+      card.appendChild(el('<div class="bar-row"><span class="label" style="width:130px">' + escapeHtml(c.causa) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, c.chamados / maxC * 100) + '%"></div></div>' +
+        '<span class="bar-val" style="width:auto;min-width:92px">' + c.chamados + ' · ' + pct(c.pct) + '</span></div>'));
+    });
+    card.appendChild(el('<p class="subtle" style="font-size:12.5px">' + a.comCausa + ' corretiva(s) com causa informada. ' +
+      'As primeiras barras somam a maior parte das falhas: é ali que agir dá mais resultado.</p>'));
+  } else {
+    card.appendChild(el('<p class="subtle">Ainda sem causa raiz nos chamados do período. Ela é escolhida ao finalizar a manutenção.</p>'));
+  }
+
+  // Gargalo
+  if (a.gargalo && a.gargalo.etapas.length) {
+    card.appendChild(el('<h4 style="font-size:14px;margin-top:8px">⏱️ Onde o chamado mais espera</h4>'));
+    card.appendChild(el('<div class="kpi-grid" style="grid-template-columns:repeat(' + a.gargalo.etapas.length + ',1fr)">' +
+      a.gargalo.etapas.map(function (e) {
+        const pior = a.gargalo.maior && a.gargalo.maior.etapa === e.etapa;
+        return kpi(e.texto, e.etapa + ' · ' + pct(e.pct), pior ? 'kpi--parado' : '');
+      }).join('') + '</div>'));
+  }
+
+  // Reincidência
+  if (a.reincidencias.length) {
+    card.appendChild(el('<h4 style="font-size:14px;margin-top:8px">🔁 Reincidência (2+ corretivas)</h4>'));
+    a.reincidencias.slice(0, 8).forEach(function (x) {
+      card.appendChild(el('<div class="list-item is-warn" style="cursor:default"><div class="list-item__body">' +
+        '<div class="list-item__title">' + escapeHtml(x.frota) + ' · ' + x.corretivas + ' corretivas</div>' +
+        '<div class="list-item__sub">' + (x.mesmoProblema ? 'Repetiu: ' + escapeHtml(x.mesmoProblema) + ' · ' : '') +
+        (x.causaPrincipal ? 'Causa: ' + escapeHtml(x.causaPrincipal) + ' · ' : '') + escapeHtml(x.tempoTexto) + ' parada</div></div></div>'));
+    });
+  }
+
+  // O que mais quebrou
+  if (a.problemas.length) {
+    card.appendChild(el('<h4 style="font-size:14px;margin-top:8px">🔧 O que mais quebrou</h4>'));
+    const wrap = el('<div style="overflow-x:auto"></div>');
+    wrap.appendChild(tabelaHtml([['problema', 'Problema'], ['chamados', 'Chamados'],
+      ['frotas', 'Frotas', function (v) { return (v || []).join(', '); }], ['tempoTexto', 'Tempo parado']], a.problemas));
+    card.appendChild(wrap);
+  }
+
+  // Confiabilidade
+  if (a.confiabilidade.length) {
+    card.appendChild(el('<h4 style="font-size:14px;margin-top:8px">📈 Confiabilidade por frota</h4>'));
+    const wrap2 = el('<div style="overflow-x:auto"></div>');
+    wrap2.appendChild(tabelaHtml([['frota', 'Frota'], ['falhas', 'Falhas'], ['mtbfTexto', 'MTBF'], ['mttrTexto', 'MTTR']], a.confiabilidade));
+    card.appendChild(wrap2);
+    card.appendChild(el('<p class="subtle" style="font-size:12.5px"><strong>MTBF</strong> = horas rodadas (horímetro) entre uma falha e outra — quanto maior, melhor. ' +
+      '<strong>MTTR</strong> = tempo médio para resolver cada falha, da abertura ao fim — quanto menor, melhor.</p>'));
+  }
+}
+
 const COLUNAS_MANUTENCAO = [
   ['ID_MANUTENCAO', 'ID'],
   ['NOME_EQUIPAMENTO', 'Equipamento'],
@@ -3114,10 +3212,12 @@ const COLUNAS_MANUTENCAO = [
   ['INICIADA_EM', 'Início da manutenção', fmtDataHora],
   ['CONCLUIDA_EM', 'Fim da manutenção', fmtDataHora],
   ['PRESTADOR', 'Prestador de serviço'],
-  ['TEMPO_ACIONAMENTO_TEXTO', 'Abertura até acionamento (expediente)'],
-  ['TEMPO_CHEGADA_TEXTO', 'Acionamento até início (expediente)'],
-  ['TEMPO_EXECUCAO_TEXTO', 'Início até fim (expediente)'],
-  ['TEMPO_TOTAL_TEXTO', 'Total abertura até fim (expediente)'],
+  ['CAUSA_RAIZ', 'Causa raiz'],
+  ['SOLUCAO', 'O que foi feito'],
+  ['TEMPO_ACIONAMENTO_TEXTO', 'Abertura até acionamento'],
+  ['TEMPO_CHEGADA_TEXTO', 'Acionamento até início'],
+  ['TEMPO_EXECUCAO_TEXTO', 'Início até fim'],
+  ['TEMPO_TOTAL_TEXTO', 'Total abertura até fim'],
   ['UNIDADE', 'Unidade']
 ];
 
@@ -3216,7 +3316,7 @@ async function renderManutencaoForm() {
   }
 
   // [OUT/2026] Admin corrige as datas do chamado e o prestador.
-  let camposDatas = null, campoPrestador = null;
+  let camposDatas = null, campoPrestador = null, campoCausaEd = null, campoSolucaoEd = null;
   if (editando && ehAdmin()) {
     card.appendChild(el('<div class="divider"></div>'));
     card.appendChild(el('<h3 class="title-lg" style="font-size:15px">Corrigir datas do chamado</h3>'));
@@ -3228,6 +3328,11 @@ async function renderManutencaoForm() {
       camposDatas[d[0]] = { campo: textField(card, { label: d[2], type: 'datetime-local', value: original }), original: original };
     });
     card.appendChild(el('<p class="subtle" style="margin-top:-4px">As datas precisam seguir a ordem: abertura → acionamento → início → fim. Os tempos são recalculados.</p>'));
+    if (m.STATUS === 'concluida') {
+      campoCausaEd = selectField(card, { label: 'Causa raiz da falha', placeholder: '— não informada —',
+        options: CAUSAS_RAIZ.map(function (c) { return { value: c, label: c }; }), value: m.CAUSA_RAIZ || '' });
+      campoSolucaoEd = textField(card, { label: 'O que foi feito', multiline: true, value: m.SOLUCAO || '' });
+    }
     if (m.ACIONADO_EM || m.PRESTADOR) {
       campoPrestador = campoComSugestoes(card, { label: 'Prestador de serviço', value: m.PRESTADOR || '', placeholder: 'Ex: Empresa de manutenção' },
         S.prestadoresConhecidos || []);
@@ -3268,6 +3373,8 @@ async function renderManutencaoForm() {
       });
     }
     if (campoPrestador) payload.prestador = campoPrestador.getValue();
+    if (campoCausaEd) payload.causaRaiz = campoCausaEd.getValue();
+    if (campoSolucaoEd) payload.solucao = campoSolucaoEd.getValue();
 
     btn.disabled = true; btn.textContent = 'Salvando…';
     try {
@@ -3303,11 +3410,16 @@ function renderManutencaoDetalhe() {
     (m.HORIMETRO !== undefined && m.HORIMETRO !== null && m.HORIMETRO !== '' ? linhaInfo('Horímetro na abertura', '<span class="mono">' + escapeHtml(m.HORIMETRO) + '</span>') : '') +
     linhaInfo('Frota', '<strong>' + escapeHtml(m.NOME_EQUIPAMENTO) + '</strong>') +
     (m.PRESTADOR ? linhaInfo('Prestador de serviço', '<strong>' + escapeHtml(m.PRESTADOR) + '</strong>') : '') +
+    (m.CAUSA_RAIZ ? linhaInfo('Causa raiz', '<strong>' + escapeHtml(m.CAUSA_RAIZ) + '</strong>') : '') +
     (m.DATA_PREVISTA ? linhaInfo('Data prevista', fmtData(m.DATA_PREVISTA)) : '')
   );
   if (m.DESCRICAO) {
     card.appendChild(el('<div class="stack" style="gap:4px"><span class="subtle">Descrição</span>' +
       '<p style="font-size:14px">' + escapeHtml(m.DESCRICAO) + '</p></div>'));
+  }
+  if (m.SOLUCAO) {
+    card.appendChild(el('<div class="stack" style="gap:4px"><span class="subtle">O que foi feito</span>' +
+      '<p style="font-size:14px">' + escapeHtml(m.SOLUCAO) + '</p></div>'));
   }
   const fotosManut = String(m.FOTOS || '').split('|||').filter(Boolean);
   if (fotosManut.length) {
@@ -3355,9 +3467,7 @@ function renderManutencaoDetalhe() {
     linhaInfo(m.STATUS === 'concluida' ? 'Total (abertura → fim)' : 'Total até agora',
       '<strong class="mono">' + escapeHtml(m.TEMPO_TOTAL_TEXTO || '—') + '</strong>')
   );
-  linha.appendChild(el('<div class="note">Os tempos contam só o expediente do setor, de segunda a sexta. ' +
-    (S.setor === 'FABRICA' ? 'Fábrica: direto, de segunda 05:00 até sábado 06:00.'
-      : 'Operação: 07:30 às 17:30, contando o horário de almoço.') + '</div>'));
+  linha.appendChild(el('<div class="note">Os tempos são corridos: contam 24 horas por dia, inclusive sábado, domingo e feriado.</div>'));
 
   // ---- Mudança de status: só o Administrador ----
   if (!ehAdmin()) return;
@@ -3386,9 +3496,18 @@ function renderManutencaoDetalhe() {
       campoInicio = textField(areaDatas, { label: 'Data e hora de início da manutenção', type: 'datetime-local',
         value: paraInputDateTime(m.INICIADA_EM) });
     }
+    let campoCausa = null, campoSolucao = null;
     if (st === 'concluida') {
       campoFim = textField(areaDatas, { label: 'Data e hora do fim da manutenção', type: 'datetime-local',
         value: paraInputDateTime(m.CONCLUIDA_EM) });
+      // [OUT/2026 — 15/10] Causa raiz: é o que alimenta a análise do porquê
+      // as máquinas quebram. Obrigatória na corretiva.
+      if (m.TIPO !== 'preventiva') {
+        campoCausa = selectField(areaDatas, { label: 'Causa raiz da falha', required: true, placeholder: 'Escolha a causa…',
+          options: CAUSAS_RAIZ.map(function (c) { return { value: c, label: c }; }), value: m.CAUSA_RAIZ || '' });
+      }
+      campoSolucao = textField(areaDatas, { label: 'O que foi feito (opcional)', multiline: true, value: m.SOLUCAO || '',
+        placeholder: 'Ex: troca da pastilha de freio dianteira' });
     }
     if (FLUXO_MANUTENCAO.indexOf(st) < FLUXO_MANUTENCAO.indexOf(m.STATUS)) {
       areaDatas.appendChild(el('<div class="note warn">Voltar o status apaga as datas das etapas seguintes já registradas.</div>'));
@@ -3399,12 +3518,15 @@ function renderManutencaoDetalhe() {
     areaDatas.appendChild(confirmar);
     confirmar.onclick = async function () {
       if (campoPrest && !campoPrest.getValue()) { toast('Informe o prestador de serviço', true); campoPrest.input.focus(); return; }
+      if (campoCausa && !campoCausa.getValue()) { toast('Escolha a causa raiz da falha', true); return; }
       confirmar.disabled = true; confirmar.textContent = 'Salvando…';
       const payload = { idManutencao: m.ID_MANUTENCAO, idUsuario: S.usuario.ID_USUARIO, status: st };
       if (campoPrest) payload.prestador = campoPrest.getValue();
       if (campoAcionado) payload.acionadoEm = inputDateTimeParaIso(campoAcionado.getValue());
       if (campoInicio) payload.iniciadaEm = inputDateTimeParaIso(campoInicio.getValue());
       if (campoFim) payload.concluidaEm = inputDateTimeParaIso(campoFim.getValue());
+      if (campoCausa) payload.causaRaiz = campoCausa.getValue();
+      if (campoSolucao) payload.solucao = campoSolucao.getValue();
       try {
         const atualizada = await api('updateManutencao', payload);
         toast('Status atualizado para "' + info.label + '".', false, true);
@@ -4042,9 +4164,9 @@ function montarRelatorio(body, r, filtroAtual) {
   // ---- [OUT/2026] RESUMO GERAL DA FROTA ----
   // Cinco números, cada um com uma pergunta só:
   //  • Em operação  = quanto as máquinas rodaram (horímetro do checklist);
-  //  • Em manutenção = quanto ficaram com chamado de manutenção (expediente);
-  //  • Parado        = quanto ficaram marcadas como paradas (expediente);
-  //  • Disponibilidade = % do expediente em que estavam liberadas;
+  //  • Em manutenção = quanto ficaram com chamado de manutenção (tempo corrido);
+  //  • Parado        = quanto ficaram marcadas como paradas (tempo corrido);
+  //  • Disponibilidade = % do período em que estavam liberadas;
   //  • Manutenções   = quantos chamados foram abertos no período.
   const imp = r.impacto || {};
   const pctTxt = function (v) { return v === null || v === undefined ? '—' : String(v).replace('.', ',') + '%'; };
@@ -4070,10 +4192,13 @@ function montarRelatorio(body, r, filtroAtual) {
   cardResumo.appendChild(el('<div class="note stack" style="gap:4px">' +
     '<span><strong>Em operação:</strong> horas que as máquinas realmente rodaram — horímetro final menos inicial de cada checklist fechado' +
       (imp.maquinasComHorimetro !== undefined ? ' (' + imp.maquinasComHorimetro + ' máquina(s))' : '') + '.</span>' +
-    '<span><strong>Em manutenção:</strong> tempo em que a máquina ficou com chamado de manutenção, dentro do expediente.</span>' +
-    '<span><strong>Parado:</strong> tempo em que a máquina ficou marcada como parada, dentro do expediente.</span>' +
-    '<span><strong>Disponibilidade:</strong> do expediente, quanto % a máquina estava liberada para trabalhar (sem manutenção e sem estar parada).</span>' +
-    '<span class="subtle">Expediente contado: ' + escapeHtml(imp.expediente || '—') + '.</span></div>'));
+    '<span><strong>Em manutenção:</strong> tempo em que a máquina ficou com chamado de manutenção (tempo corrido).</span>' +
+    '<span><strong>Parado:</strong> tempo em que a máquina ficou marcada como parada (tempo corrido).</span>' +
+    '<span><strong>Disponibilidade:</strong> do período, quanto % a máquina estava liberada para trabalhar (sem manutenção e sem estar parada).</span>' +
+    '<span class="subtle">Tempo contado: ' + escapeHtml(imp.expediente || '—') + '.</span></div>'));
+
+  // ---- [OUT/2026 — 15/10] Causa raiz e prestadores ----
+  montarAnaliseManutencao(body, r.analise);
 
   // ---- Por máquina ----
   const hpm = (r.horasPorMaquina || []).slice();
@@ -4103,7 +4228,7 @@ function montarRelatorio(body, r, filtroAtual) {
   // ---- Tempo médio de cada etapa do chamado ----
   const tm = r.temposMedios || {};
   const cardTempos = el('<div class="card stack"><h3 class="title-lg">🕒 Tempo médio por etapa do chamado</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Média dos ' + (tm.finalizadas || 0) + ' chamado(s) finalizado(s) no período, em horas de expediente</p></div>');
+    '<p class="subtle" style="margin-top:-6px">Média dos ' + (tm.finalizadas || 0) + ' chamado(s) finalizado(s) no período, em tempo corrido</p></div>');
   body.appendChild(cardTempos);
   cardTempos.appendChild(el(
     '<div class="kpi-grid">' +
@@ -4155,7 +4280,7 @@ function montarRelatorio(body, r, filtroAtual) {
 
   // ---- Ranking de tempo em manutenção ----
   const cardRank = el('<div class="card stack"><h3 class="title-lg">🏭 Máquinas com mais tempo em manutenção</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Horas de expediente, da abertura ao fim de cada chamado, dentro do período</p></div>');
+    '<p class="subtle" style="margin-top:-6px">Horas corridas, da abertura ao fim de cada chamado, dentro do período</p></div>');
   body.appendChild(cardRank);
   if (!r.rankingTempoManutencao.length) {
     cardRank.appendChild(el('<p class="subtle">Nenhuma manutenção com tempo apurado no período.</p>'));
@@ -4679,10 +4804,10 @@ function montarFrotasExecutivo(body, f) {
     '</div>'
   ));
   body.appendChild(el('<p class="subtle" style="margin-top:-4px">Horas em operação = horas rodadas do checklist, horímetro final − inicial (' + (f.maquinasComHorimetro || 0) +
-    ' máquina(s)). Horas em manutenção = tempo com chamado de manutenção, só no expediente (' + escapeHtml(f.expediente || '') + ').</p>'));
+    ' máquina(s)). Horas em manutenção = tempo com chamado de manutenção, em tempo corrido (' + escapeHtml(f.expediente || '') + ').</p>'));
 
   // ---- Gráficos por frota ----
-  body.appendChild(cardBarras('Frotas paradas, em horas', 'Tempo sem operar (em manutenção + parada) dentro do expediente',
+  body.appendChild(cardBarras('Frotas paradas, em horas', 'Tempo sem operar (em manutenção + parada), em tempo corrido',
     (f.paradasPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
     'var(--st-parado)', 'Nenhuma frota ficou parada no período.'));
   body.appendChild(cardBarras('Quantidade de manutenções por frota', 'Chamados abertos no período',
@@ -4773,6 +4898,7 @@ function montarRelatorioExecutivo(body, r, filtroAtual) {
 
   // ---- [EXECUTIVO OUT/2026] Pontos de atenção e visão por frota ----
   montarFrotasExecutivo(body, r.frotas);
+  montarAnaliseManutencao(body, r.analise);
 
   // ---- Manutenção ----
   body.appendChild(el('<h3 class="title-lg" style="margin-top:4px">🔧 Manutenção</h3>'));
