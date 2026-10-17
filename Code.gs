@@ -40,23 +40,41 @@ const SHEETS = {
   UNIDADES: 'CONFIG_UNIDADES',
   USUARIOS: 'CONFIG_USUARIOS',
   RESPONSAVEIS: 'CONFIG_RESPONSAVEIS',
+  FORNECEDORES_GAS: 'CONFIG_FORNECEDORES_GAS',
   EQUIPAMENTOS: 'EQUIPAMENTOS',
   CHECKLISTS: 'CHECKLISTS',
   CHECKLIST_ITENS: 'CHECKLIST_ITENS',
   NAO_CONFORMIDADES: 'NAO_CONFORMIDADES',
   MANUTENCOES: 'MANUTENCOES',
+  LAVAGENS: 'LAVAGENS',
+  LAVAGEM_ITENS: 'LAVAGEM_ITENS',
+  TROCAS_GAS: 'TROCAS_GAS',
+  EMAILS_MANUTENCAO: 'CONFIG_EMAILS_MANUTENCAO',
+  STATUS_HISTORICO: 'EQUIPAMENTO_STATUS_HISTORICO',
   SEQ: '_SEQ'
 };
 
 const HEADERS = {
   CONFIG_UNIDADES: ['ID_UNIDADE', 'UNIDADE', 'ATIVO'],
-  CONFIG_USUARIOS: ['ID_USUARIO', 'NOME', 'USUARIO', 'UNIDADE', 'TIPO', 'SENHA', 'ATIVO'],
+  CONFIG_USUARIOS: ['ID_USUARIO', 'NOME', 'USUARIO', 'UNIDADE', 'TIPO', 'SENHA', 'ATIVO', 'SETOR'],
   CONFIG_RESPONSAVEIS: ['ID_RESPONSAVEL', 'UNIDADE', 'NOME', 'ATIVO'],
-  EQUIPAMENTOS: ['ID_EQUIPAMENTO', 'UNIDADE', 'NOME', 'CODIGO', 'TIPO', 'STATUS', 'STATUS_DESDE', 'OBSERVACOES', 'CRIADO_EM'],
-  CHECKLISTS: ['ID_CHECKLIST', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'DATA_HORA', 'STATUS', 'FOTO_EQUIPAMENTO'],
+  EQUIPAMENTOS: ['ID_EQUIPAMENTO', 'UNIDADE', 'NOME', 'CODIGO', 'TIPO', 'STATUS', 'STATUS_DESDE', 'OBSERVACOES', 'CRIADO_EM', 'SETOR', 'MOTORIZACAO'],
+  CHECKLISTS: ['ID_CHECKLIST', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'DATA_HORA', 'STATUS', 'FOTO_EQUIPAMENTO', 'HORIMETRO_INICIAL', 'HORIMETRO_FINAL', 'FECHADO_EM'],
   CHECKLIST_ITENS: ['ID_ITEM_RESPOSTA', 'ID_CHECKLIST', 'ITEM', 'INSTRUCAO', 'RESPOSTA', 'DESCRICAO_PROBLEMA', 'FOTO_PROBLEMA'],
   NAO_CONFORMIDADES: ['ID_NC', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'ITEM', 'DESCRICAO', 'FOTO', 'STATUS', 'ABERTA_EM', 'FECHADA_EM', 'ID_CHECKLIST_ORIGEM'],
-  MANUTENCOES: ['ID_MANUTENCAO', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'TIPO', 'PRIORIDADE', 'TITULO', 'DESCRICAO', 'STATUS', 'DATA_PREVISTA', 'ABERTA_EM', 'INICIADA_EM', 'CONCLUIDA_EM'],
+  MANUTENCOES: ['ID_MANUTENCAO', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'TIPO', 'PRIORIDADE', 'TITULO', 'DESCRICAO', 'STATUS', 'DATA_PREVISTA', 'ABERTA_EM', 'INICIADA_EM', 'CONCLUIDA_EM', 'ACIONADO_EM', 'HORIMETRO', 'FOTOS', 'PRESTADOR', 'CAUSA_RAIZ', 'SOLUCAO', 'CATEGORIA', 'SUBCATEGORIA', 'ABERTO_POR'],
+  CONFIG_FORNECEDORES_GAS: ['ID_FORNECEDOR_GAS', 'UNIDADE', 'FORNECEDOR', 'VALOR', 'ATIVO'],
+  LAVAGENS: ['ID_LAVAGEM', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'DATA_HORA', 'STATUS', 'FOTO_EQUIPAMENTO'],
+  LAVAGEM_ITENS: ['ID_ITEM_RESPOSTA', 'ID_LAVAGEM', 'ITEM', 'INSTRUCAO', 'RESPOSTA', 'OBSERVACAO'],
+  TROCAS_GAS: ['ID_TROCA_GAS', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'FORNECEDOR', 'HORIMETRO', 'HORIMETRO_ANTERIOR', 'HORAS_OPERACAO', 'CUSTO', 'DATA_HORA', 'QUANTIDADE_KG'],
+  CONFIG_EMAILS_MANUTENCAO: ['ID_EMAIL', 'UNIDADE', 'EMAIL', 'ATIVO', 'SETOR'],
+  // [NOVO 17/09] Histórico de mudanças de status do equipamento — usado
+  // para calcular horas em manutenção/parado/em uso DENTRO de um período
+  // escolhido (semana, mês, personalizado). Só existem registros a partir
+  // de quando esta aba foi criada — mudanças de status anteriores a isso
+  // não ficaram gravadas, então relatórios de período anterior à criação
+  // desta aba usam STATUS_DESDE como aproximação (ver segmentosStatus_).
+  EQUIPAMENTO_STATUS_HISTORICO: ['ID_HISTORICO', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'STATUS_ANTERIOR', 'STATUS_NOVO', 'DATA_HORA'],
   _SEQ: ['PREFIXO', 'ULTIMO_NUMERO']
 };
 
@@ -89,8 +107,20 @@ const CHECKLIST_ITENS_PADRAO = [
   { item: 'Cintos e itens de segurança', instrucao: 'Cheque cinto de segurança, extintor, proteções, grades e travas quanto à integridade, validade e fixação.' }
 ];
 
-// Respostas aceitas por item do checklist.
+// Respostas aceitas por item do checklist (usado por checklist de
+// manutenção e pelo checklist de lavagem, que segue o mesmo padrão).
 const RESPOSTAS_CHECKLIST = ['ok', 'nok', 'na'];
+
+// Perguntas fixas do checklist de Lavagem — mesmo padrão do checklist de
+// manutenção (OK/NOK/N-A), mas focado na limpeza do equipamento. Pode
+// editar o texto aqui a qualquer momento; a próxima lavagem já usa o novo.
+const LAVAGEM_ITENS_PADRAO = [
+  { item: 'Lavagem externa completa', instrucao: 'Estrutura, carroceria e rodas/rodízios sem sujeira, graxa ou resíduo visível após a lavagem.' },
+  { item: 'Painel e cabine/comandos', instrucao: 'Painel, alavancas e comandos limpos e secos, sem produto de limpeza residual sobre eles.' },
+  { item: 'Ausência de vazamentos após a lavagem', instrucao: 'Confira o piso sob o equipamento: não deve haver óleo, água ou combustível escorrendo.' },
+  { item: 'Produto de limpeza adequado', instrucao: 'Usado o produto autorizado para o equipamento, sem substância corrosiva ou abrasiva.' },
+  { item: 'Secagem de partes elétricas', instrucao: 'Painel elétrico, bateria e conexões bem secos antes de religar o equipamento.' }
+];
 
 // Logo da ICC Brazil em base64, usada no cabeçalho dos relatórios em PDF.
 const LOGO_ICC_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAaiElEQVR42u2ceXRU153nP/fe96pKKm0gCSFAiB3EarxhYxuMs3jpODjpDo67k5NkuieL0xN3TnImmZ450/YkM72cdOek0xPHcafTGUPbODhesI2XDtgQmX0HsQokoQVtSEKq/b1754/3qlSlBYMdO+fM1M/nIo716t77ft/f/vsV4tDhI4Y8fahktEZIScPx41jLli7Jc+T3BoSLpbXOc+JDJq01UkoSiQSWlDLPkd8DSSkRQpDn/u8biDwL8gDkAchTHoA8AHnKA5AHIE95APIA5CkPQB6APOUByAOQpzwAeQDylAcgD0Ce8gDkAchTHoA8AHn6YMh6Px82xmAYPVgnEAgh8tz9IABIM10Kb65FMD6jtdF5MH5XABijwRiEVBmmDyW76RzoIJIYwhiQQhK0C5hcVkNJcCJSeBbOaBeExggbAXx4cIzWT5H15wex/7WecVUApEfpENAxcIF3Tr7O0fNv03bpDEPxIQwCKQIYQBhNOFhEdeUMls9ZzS1z1lBdMhtQaH8o9UraldaaUfc3gBDIK2iTwfiCIjzwxdj6aYwvUIJ31eKRJ2hjwPifG2d/TPouJvPceCSMMeaK+PqHdQ+2snnPL/nNsZcw0mZ+zVLmTa5j1qR5FBdOQEqJ67gMxgY5f/E0p1oP0th+FGEcPrbsAe676UuUl0zFGJNhrngPkqgBabIFzJdCbUaB65okjusMM00KLMvCIjC2gF2NEObcxcFxU7ja9ayDkEhlEZB2bnxjwKBBSETWXnv27BkfAA9BkEJQf2ozP//3v0Enk3x8xX/gzpnLqErFUdUrwA6Pe+mOvjbeOPo0bx7ahK1C/Omab3D7wk97DBEgfS6mJaX10ll+e+wllA0GC+MrqBSCVCrJktoVLJ6+ArRGSOH7GeObOkFn9CLnW49w7uIx2vuaGIz2EU9G0NrFAFIpAkGb8oIKpk2aR+3kRdRNvZ5ieyJoMNKMKRTp+6V0hLOdxznb3kB75xkuDrURS8Rw3CSucVCWwpYBikNFTJ4wmWlVi5gzZTmzJizMmHEh5NUAYMAIEJp/2/4jfv3bx1mxaA1/suY7TBEO0V99m1T3MdzJyym+/69RE2ahERgjPOiMwRIK6TOpZaiRZ7f+A7uObWXt7Q/z0KqvYmFlxFgbjRSSvU1v8j83PkxBwEZLQ5odSkiGooN8buV3Wbfqa2jXRSrhM0YRS1zmpd3/wttnttB7uQOXBNKyEVhIoxHCA1FrF4FBGxfXBSVsqktncvcN6/jY0s8isUDkqFeG+XvPbuXl3f/K2UvHiaaiSKlRykYivfc0BikErjEYDcZ1EQbCoYlcX3sr61Y9TGXxDC+IMSYDwJg+wGiDkYZfvv23bK7/JV+48+t8cuVXEQQZ2PZ9VMcOghMmYdq2Y869jbhxHtJojABpDEJZuBhSxoBxmF40m2/d/2M2lT/JM2//PY7TwxfWPIrQBiQZR2apIEWFZdjBYXAQnnN3hULZ3nWNEL7kK9oGT/DEi49xqv0IVqFNMFSAkAEQLsLYntoLT6A8xdOA9BnhcHGoiZ+9+Rhtl1r40prvghb4sYN/hub5+id4dvcTaKkJBgKUWkVoJEhQwjOJBgloNAaT9ivGkNRDvHXqRZq7jvKNT/2QaWUL0NrJmCg5lq0TUvLy3n9lc/0Gvnzvt1m78hFwJMZoAhNmIUQIHb1MQgYQJVN8e5tCCYmQFpeHOnHcOEqAJSy0dgHBZ277Cl/8yF/yav2zbN7/C4QvxVkOCaPjaJPEaA1aY1yN0RpXazSOb3s93Ui4EZ5842841nOAwrISlAoADkaD0DZaO0Sj/UQi/USifaRSMQwGbRy0cTCAHQhSVFzGawc3svvUNoT0NMX4Ev3WkRd4tv6HBAsUhaEAEoMxLsI4gCaSjDEQG2Ao2k8kNujtaxwMKTQOQirCJRU09p/lqe0/xtWJHCNnjQw1pZScvLiLp7f+iPtv/jz3LP8ztHERykM1tPRTRCPdJJvrkfPvwpr7EXA1tgrS3HOck2cOUTN5PnOnL/NCTiEQQnkRjtbcv+KL9A9d4JmtP2Je9TLqpt6A46ZAXUNSbjRC2uw++wYnWvZRFp6Iq128YMOL1hwnhS2DrFnwB1RXTiWiYxw6v4+OrhNYdtrMGEAjhUJKzY5Tr7Fi/p0Zhz2YGGDzvl9gFYSRwkIbdziyEoKk47Co6kYW16zAsi06Lp5k3/l3SKoEQshhRqdShArKaGg9TEfPKaZNWjoaAIMX/jlunKe2/hNVldN56M6HPRsICCExgGOChG97BG77GhDwHIuSbNm7gePnDrJuzZeZPmmev58hbWA85mi0gQfv/AsaWvbw7Nt/z18+9CSKUCY+TNtIzHCMndaSYQfp/TzbdtjLL0ZE4UY4CCP40zv/C7fXrc385hNLe/n+0/+RtshJAlYBaeXTxiCkoWvwHEl3kIAoBeDipUa6o50o23vPTP1GSOLJKMtrbueba3+ILQszv3uu/qds2vs4dkEQ4R9ghEFJQTIVpWOoNQcAOWx6PC7tPP8mZ5r387k1jxCyij1GepCTcqN0dp/FaBejLbTjIoRkw/a/Zc/RLfzZJ77D9EnzcHUKjMZklsnwTeMQUMV8atXDnG45zP6zbyGVyoT6V0PpuLqvvx8pFYLheFsKgXahuLCcxTNvxRiDo5O4rktpsJwpFdNxHIEwATA2GBthbKS0cFMJUik3s38kdhnXdUdHRgK0q1ky+1ZsWUjSSZJ0UxgDtVNnYYTGxcEVLlpojDAIAa5OEIlGxy7GSSFxcXn94Cbm1S7jhpmrMcZFCuFLiqCl8zz9kS6EVBjtIC3F5oM/Z8fR1/jzdX9HWbiSlE5lnJAQlr+UD4JEChvXuNww825mTV3Mvx96BgedkzteLRApk/Q/JHKYI4xEGhvteGApYSOF9Ow/Cim9CC17IS2EzI1JPKZqP/swo+qYQhRg8KRbSoUQ4DgGicDGwsJCZf9nFG5O0Ol/Rcn4oVrH5SaaWo5y64L7ENgZyU1/pOHCAUIFxd7xVoDGruNs2PpPrLvrP1FeNAU35WAZgSUsEJJzbQ28c/RVzredzISows9WlZTcuuATNLSdoK2/abjccdUlXI1WDsbkOnJPQzQYkDmI+pFJIkEiEiURjRHPWtH4EPFEDC3dDJ5aaD/z1qOFQuC/j8gpSLhak4glSEVSJKOR4RWLkIwOoR0nJ9y30qm5ENDYegilFQun34ABXCGRgBSKpJukpfc4ty5YnbHLG9/530wuq+X2eX+A0V4sL5TkeMvb/Oqtf0aKAKuWr6WsuDKTE6QTK4C6GTdg3oLm9sPUls3KAuDqdMCMV1gyGXbnMswY7rnhj1ky/05sZeX4FpcEhXYRQRnKJEygfQXz86Kxiz7eDv47zZ+8mK9+4jGksP2UfdhsplIpFk65MWv/tBP2NzrXeZrisnKmlM3KMCodLwxEu7g01E0oVOA9e+ksR5t285mVXyKggrhOAmUF2HLon3nq9X9kzXUP8Pm7vk3ILsliqsyx4VUTaykpqeBM5yFWLfxUVuwvfCZeGQqddthZjtrz+yYXR5kWWMGiGStZdOVyDxr3qgpqaYglAukDVFFSw8cWf/bKZQ3XRSjvLCt7o0uDlygtLSNoeUxWiEztJpaMEEsk0P5Bje1HcFIOs6cu8561grx+ZCNPvP59/vCWh/n86v/svYzrIqVKh0HDFzdQoEJMLJvApYGebIv4wZFgOMoah7dSyLGl/VrK9dowCj8xrJnZv8jxOvFEDKUsss1StrTF4hGSyQSEoLWrgYJQIRWltQA09TSwYesPWFyzhgfv+IaX9gvhM38cMyEEQdsiEU+kM7EPvEDtRUtwBXvyPjEWmTqVGfk+AsQIn5Ujco5Ojqv0gWAhCTdBb+QiAL0DFykIhSgMeDHwtiPPEncu8+lbvkxAhnBxuao+jDFZZ5prjIPeo4Qa45eks5fhCoXhq99fgCsMrvBK16OW0GihxwagKFxIMpFMl95zBKO8cBIBO8iZztMAJFJJ7ICFrQLEnQhHz+1n+oT5zJ9e54dm6sqG1o8i4vE4BaHQB8z2kRogh+v5I5YxzrAJuUbz5llWg0J4S8hRSyJzwgMLM1zxm1I6jTMXDhFN9BMOluH6m2mjCaoQMypqOXBqK/df98cUFhQx2DtIyk0wGI/QPtDMHXX3ErbKcI1GCTkuR9MAX04N0DvUzeKa64eV4XfascpVNCHg1+/8jFOd+wkGgllREDiuYGKokofu/DoF1oQcbbma+6R52Nh+gOd3/xxlh7zSRVrSpSARj3Pv9Q+xfObqET7Af/GZU5awefd6WnpOUTd1RebW6TtcN3sVT7zyV7QPnmFa5Sy2n3iBi72NlBVW4ZKkpLjML2UbMiXFcS8LHb3n6I9eYva06z+0IY0THXt5p3ELRYUlfpEwHSIaphbNZJ3+yjX3sA3Dkn9p6CK7zm7BChV5fY8MAJJIZJAb5t42OqdJHzhz6lKCwQKON+3OVCe9yMB7eOmc1RQWlfFK/f9h3pRFaBd2Hn8Ty1IEpMXAYL/vacRV6ezxxl2E7CDTJy1M3/IDByBoF1IUKqUoOGKFiikIhhFCvSf9y0S80iIcLKEwUEQ4WJyzikKl2DI0NgBGG6pC1SyfdQc7G14m5vaDkGjjYgQ4xqE8VMF9y7/Aa/t/zcVLbSycfQtvHH2R5p5T1E6ey7muo8TdIYQQXu4oxpJ+r7YScwZ468RmltWuprpoqn+Z360XGNky90yKRhvXL0m7WSvllcCvIQQ1mBzPZfzqqtY6U/LOXl6J3R67FpS+7EeX/REtvS28dexVvw5k/ExPoo3mnhsfZGHtUp7f+VMqJkzClQ7P7/wJBeFiLvQ10dBSj0R4kxBj9nQ1Qgi2NbxEe08z91z/h0jUe4iCBLY1trSmeWgpr5xiXJ2x0a7WmeZ67nIJ2ArbtjK+yLYtzzqYsQ9RwgbfR2rtVZOlUBgjM5luNvhSKcKFBTmOW2Y7CaMNddNuYuXiT/LsW4/TE2lHSQutDQKJBooCJXx17f8iFAxz5GQ9pcUlNHU3cq71FJZVwEt7nyWpY17xy7gZC4nfCFHCpmvoPJu2/4RblnyURVNX4LqpsfX5ChkwCMqLp+PoYU0z6aqNtLkc7+ZE52EvF1Fe8e30hcM0XzxHMBBC+P1uKQRKKFwdp7RoIkErjPaLgyWFlSilcIzMFP2Mv4QSnL6wD9cksVWAgLKIJ/vZeWJrJpMfJoUWGltJysPV44ylpItlRvDgbX/OsTO7+PnL3+Ob636ARTjTSDZaM7V4Jt/89I/48Qvfor2vlYLiMDqlCdk2DW27eL7+Jzx4x7c8dcdF+i1AicQ1cX72+g/QxvDgHY/4hscZGc29Cw7eb+qqbuQ3ZlPG5QxXHgyuSfDklv/O3tm3UxQupW+wl2Pn9xPTl1CWzO3ESTApWFizAoHyBMdA9YQZVBZPpe1yc6Yd6km8IRAsYFfjFi49186MymUkdITzbcdo7jmDCthof+wlvb+TTDJzQh01FXNxtZsJ0+XIGFkblykTpvPw2sc4eP63/Mtr38MIB0tKL7uVEuNqZkyo47ufeZyl01cSHRzE1Q7KCEqCIV7e92/8esdPvTEN4WuQUBiR4snXHuPo6V187b7/QU3JXFzjZry8wMsU8Vs5ObYyy6V4ZsFw0+xbmFddRyQ6hJKWH2OD1AZb2Qy5Q2w7/iKv7FlP/clXGTS9YEnPROB16pSyGIxeZvbkZaxe/AC43hCAqw3FdhkfWf4AOhFDau3nD35TVAuECtLQsZ/NB37BG4fWc67vBCKkMP5lhQApFVo7qITLJ2/+HEG7AMcPTw2gHv2rRx8dBQIOUyfOpqi0jGfqf0ZrTytLZq6gwC7wG/YabTRFwYncWnc3E0MVdPQ00n95gKTrYBQca95NU2cDkypqKS+qIpro4/FX/hvbj77C1+//r9y2YK1vktIFOknnQDO7Tr2GshVSgBQGKQxKQsqNs3jazdRNu8mv5QhsFWLm5MWcO3+MrssXkFJhSwVSYaTXnw4GQgSCQQJ2EOWVzVBYGKOIu4ZYLE5t5Xwevvd7TC6uxcHriXt+zDCzahGR5ACnWw/hCgdhu35CZSOxsK0QwUCQoF2IpQJ++UVihMDBxYlHCaYKeWjVI6xZ8ke4fuNLCUlbWxvC6DHyb6EzIx87GjbzxOuPUV5cxZ+s/gtunvuxLFucRBgLISV90YvsadzN8QvbuNR/ETeeIuEOMWFiFXMmLWDvmT109nfxtfu+w+0L1uKaJEpYWWMpFvvP/4a/3vgVZIHXT8iEwdIbS/n8ym+x7o5HvP6vVGhtsKTgUqSTLft/wa6zb9Lb14VjObjSy7682oz0e9Kur00WARGiuryGm+Z8hHuXf5bSYCXaaIxfghf+9Jww4CqH7adfZdvBX9HY3UDCcZDSZAQn7ai11rja8UGwKA1WsmDaEu6+bh2Lp96K8ZnvGo0lJbuvOBeEwdUaJS0ae46w/vW/41jLARbPWcHd161j4bQbKSmoHHd+ra2viYbW31LfsJmj5w6wsPZWvvjR7zJ70mIcrb1OlF8i9CaAJN2DbRw4/zZGeaMn6VqWEIKUk2TepKXMm3xdRgO8BogHAkB3rIOm1qNc6D1D12APqWQKx436nb0Atl1IYWEBVWVTqamYw4xJ8yi2y/0oxUEIC5PjgwxCO2AkKEXKJDjdeYTzPSfp7m4nGusj5SQx2ouwbNsmECiipKSUqZXTmV2+jOqSmcPhtwDjj2iqKwOQO+HstStTvH38RV7b90va2pspKS6jpnoOtZPnUh6ejCWDuMale6CLlq5TNHeeZig+QE35HD5y02e5c+E92CKMqw1CivcxpGtGlSuM38CX72EKW/tZ+buNSWY3UcYprjDujBUm81khrnI0cVTyJDyv7ZgEJy/s42DTTk5fOEhffyfx1CBaakBg2QGqJ8xk/pSlXDf7DmqrlxOWQdD44y0qc10x1jik1ll9XpNdyAchr2I414xq3mcONLmp2bUN5mbvb4a7KNn3Mel5WjPcJRtjgPeaAcg+XI6QgmjqMvFk1GOuEBQGCymwSnPY62q/typEjvx+OGPq5gMr8DHO8PvVTpuPP5roZ42jGg1C5IxoSykptEsozLQds9t6OtPWlFLyYf4D1bn3f3/drRxNGiMbH4tX10LWeDXz0ZMGw4cJvMmx9DNaa1/dssBCDO/jtwJHmo/0fuP9HOu5se43SlhGfHa8597t/LH2GXmPse4y1n7j3UFmqwXA8ePH2bhx46iLnDp1itOnT+ccsn37dowxHDhwgO7ubqSQw19d8g9KA6bEsOPNrKxnxvq5bds2+vv7c/ca8feRL5hKpWhoaBjRgBn7SxLvdn5vby+NjY2jzj5x4gTt7e04jsORI0cQQtDS0sLJkydH7ZPNw7HuIEci19zcTH9/P729vQghaGpqYtOmTbzyyisMDAxkGLNhwwYOHz4MwNDQEAAdHR08/fTTbNy4kY6ODgC2b9/OU089xZYtW3IYNTg4yN69e3Ech/r6eowx7N27l02bNnHkyBFvNPDiRZRSnDlzhq6uLs6ePUtTUxPGGLZt28Zzzz1He3u752dcL8Zvbm5m/fr1tLe347ouW7ZsYcOGDbS0tOQIWjwe54UXXuCZZ57JvMeePXuIxWLs37+fWCzG4cOH2bhxI1prTp48yfr16+np6SGRSGCMoampifXr1zMwMIDWmng8DsCOHTtYv349x44d80bb9+5l/fr1vPrqqySTydE94TRKvb29tLa2UlBQwK5duxBCsGPHDu644w6WLl1KIBCgq6uLwcFB1q5dSzgcRkpJT08PruvS2dlJeXk5s2fP5uzZs/T09NDa2sratWtpaWkhmUxm1LmwsJCOjg727dvH4OAgAD09PWitOXjwoF+NtLEsi7a2NqLRKL29vVy+fJnW1laOHDmClJKdO3fmSFZlZSVLliyhurqaQ4cOEQgE+PjHP86OHTtyJG9wcJDu7m5WrVrFiRMnvEmPxka01rS0tBCJRKipqWHp0qVIKTl16hRlZWVMnDgxw4Pq6mqWLFlCSUkJfX19xGIxenp6uHDhAg888AD79+8nlUrR1NTETTfdRCKRoLm5GaXUaAAAdu/eTVVVFQsWLKCpqYlkMkkoFCIWixGJRHAcJzNgFIlEMpKfjWhFRQWlpaWkUils20YpRWdnJ0qpzMHGGJRSzJgxgy1btnDLLbcwNDRER0cHxcXFDA0NYYwhkUigtcayLLq6umhra8t8NhQKUVpaSnFxcQ5jbdsmkUiQTCYJBoO4rks0GsWyrFGRyMSJE6msrMzcXylFe3u7Z06lxLZtYrGY5ywti9raWu+rWK6L67oEAgHi8Tha68z0t1IK13WJRCIZwbAsi0mTJhEKhUilciu/6tFHH300bX4GBgZYvXo1NTU1hEIhwuEwM2fOpL6+HsuyqKuro6qqir6+Po4dO8a8efOYPn06WmuqqqoIBAKEw2GKiooIBoNMmjSJxsZGzp07Rzwe5+abb86xheFwmMLCQubPn49SiqGhIVKpFFOmTGHy5MnYtk15eTmVlZUcPHgQpRR1dXVUV1eTSCS4dOkSN954I0VFRZl9Lcuir68P27aZO3cuFy5c4PTp09x1112Ew+Ece25ZFuXl5SilMgw6ePAgVVVVzJs3j3A4THt7OzNmzEBKSUlJCSUlJQghKCsro7S0lJ6eHsrKyigrKyMYDFJdXY3ruuzZs4eVK1dSUVGB67pUVFRg2zYVFRUUFBQghPBrQWPkAVfzpbWrIcdx2L17N729vcyePZtFixa977Dt/wUaNxHLZs7IECrbm2f/P+kXusYLXccK98YD+932HesOVwov30sYmn3+u4XAQojhPskVQuTx9h+ViGVfcLzQ7GrCtyu95KgwLEvT3m3fse4wXh5zLc9dy7uO/Hv6/lc6c+Qe407GfVCDUO/GiP+fKf+vpeQByAOQpzwAeQDylAcgD0Ce8gDkAchTHoA8AHnKA5AHIE95APIA5CkPQB6APOUByAOQpzwAeQDylAcgD0Ce8gDkAcjT75j+L3IMo6SzSov0AAAAAElFTkSuQmCC';
@@ -105,6 +135,33 @@ function autorizarPermissoesPDF() {
   const doc = DocumentApp.create('teste_permissao_' + new Date().getTime());
   DriveApp.getFileById(doc.getId()).setTrashed(true);
   return 'Permissão de Google Docs/Slides autorizada com sucesso.';
+}
+
+// Rode esta função uma vez pelo editor (▶ Executar) antes do e-mail
+// automático de nova manutenção funcionar pelo app publicado — a
+// implantação como Web App só consegue usar uma permissão que já foi
+// autorizada por aqui pelo menos uma vez.
+function autorizarPermissoesEmail() {
+  const destinatario = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+  MailApp.sendEmail({
+    to: destinatario,
+    subject: 'Central de Frota — permissão de e-mail autorizada',
+    body: 'Este e-mail confirma que a permissão de envio de e-mail do Apps Script foi autorizada com sucesso. Pode ignorar esta mensagem — é só um teste.'
+  });
+  return 'Permissão de e-mail autorizada com sucesso — confira sua caixa de entrada (' + destinatario + ').';
+}
+
+// [PERF 14/09] Rode esta função uma vez pelo editor (▶ Executar) depois
+// de colar o Code.gs da correção de performance. Ela só existe para o
+// Google pedir a autorização de PropertiesService (usada agora para
+// lembrar o ID da pasta de fotos no Drive, em vez de buscar de novo a
+// cada foto) — sem rodar isso uma vez, a implantação publicada pode
+// devolver uma página de erro/autorização (HTML) em vez de JSON para
+// QUALQUER ação, não só as de foto.
+function autorizarPermissoesArmazenamento() {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('teste_autorizacao', new Date().toISOString());
+  return 'Permissão de armazenamento (PropertiesService) autorizada com sucesso.';
 }
 
 // Cria todas as abas com os cabeçalhos corretos e alguns dados de exemplo.
@@ -151,6 +208,25 @@ function configurarPlanilha() {
     ['EQP-003', 'Macatuba', 'Paleteira Elétrica 01', 'PAL-01', 'Paleteira Elétrica', 'parado', agora, 'Aguardando peça', agora]
   ]);
 
+  // Fornecedores de gás e o valor cobrado por troca, por unidade — edite
+  // ou cadastre novas linhas direto na planilha quando o preço mudar ou
+  // uma unidade nova precisar de fornecedor (não precisa mexer no código).
+  seedIfEmpty_(SHEETS.FORNECEDORES_GAS, [
+    ['FGA-001', 'Macatuba', 'Paiva', 230, 'SIM'],
+    ['FGA-002', 'Macatuba', 'Copa Energia', 128, 'SIM'],
+    ['FGA-003', 'Jundiaí', 'Fire gás', 142.8, 'SIM'],
+    ['FGA-004', 'Jundiaí II', 'Fire gás', 142.8, 'SIM']
+  ]);
+
+  // Quem recebe e-mail automático quando uma manutenção é aberta, por
+  // unidade — cadastre/edite direto aqui (não precisa mexer no código).
+  // Unidade sem nenhuma linha ativa aqui simplesmente não dispara e-mail.
+  seedIfEmpty_(SHEETS.EMAILS_MANUTENCAO, [
+    ['EML-001', 'Macatuba', 'lucas.gomes@iccbrazil.com.br', 'SIM'],
+    ['EML-002', 'Macatuba', 'rodrigo.cruz@iccbrazil.com.br', 'SIM'],
+    ['EML-003', 'Macatuba', 'diego.silva@iccbrazil.com.br', 'SIM']
+  ]);
+
   SpreadsheetApp.flush();
   return 'Planilha configurada com sucesso.';
 }
@@ -167,8 +243,8 @@ function seedIfEmpty_(sheetName, rows) {
 
 function doGet(e) {
   try {
-    const params = (e && e.parameter) ? e.parameter : {};
-    const result = routeAction_(params.action, params);
+    const params = Object.assign({}, (e && e.parameter) ? e.parameter : {});
+    const result = routeAction_(params.action, params, params.token);
     return jsonOut_(result);
   } catch (err) {
     return jsonOut_({ ok: false, error: err.message || String(err) });
@@ -178,11 +254,184 @@ function doGet(e) {
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
-    const result = routeAction_(body.action, body.payload || {});
+    const payload = body.payload || {};
+    // [OUT/2026] Reenvio do mesmo registro (ex.: depois de um timeout no
+    // app) devolve o resultado da primeira vez em vez de gravar de novo.
+    const result = comIdempotencia_(payload.idRequisicao, function () {
+      return routeAction_(body.action, payload, body.token);
+    });
+    // [PERF 15/10] Avisa o espelho do Firebase (Integracoes.gs) que houve
+    // gravação: o ciclo de 1 minuto só relê a planilha quando isso acontece.
+    if (result && result.ok && String(body.action || '').indexOf('gerar') !== 0) {
+      try { PropertiesService.getScriptProperties().setProperty('INT_SUJO', String(Date.now())); } catch (e) { /* sem problema */ }
+    }
     return jsonOut_(result);
   } catch (err) {
     return jsonOut_({ ok: false, error: err.message || String(err) });
   }
+}
+
+// [OUT/2026] Guarda por 10 minutos o resultado de cada requisição de
+// criação (identificada por um idRequisicao gerado no app). Se o mesmo
+// idRequisicao chegar de novo, espera a primeira terminar (se ainda
+// estiver rodando) e devolve o MESMO resultado — nunca grava duas vezes.
+function comIdempotencia_(idRequisicao, fn) {
+  const id = String(idRequisicao || '').trim();
+  if (!id) return fn();
+  const cache = CacheService.getScriptCache();
+  const chave = 'req_' + id;
+  for (let i = 0; i < 12; i++) {
+    const v = cache.get(chave);
+    if (v === null) break;
+    if (v !== 'andamento') return JSON.parse(v);
+    if (i === 11) {
+      return { ok: false, error: 'Este registro ainda está sendo processado. Aguarde um instante e confira a lista antes de enviar de novo.' };
+    }
+    Utilities.sleep(2000);
+  }
+  cache.put(chave, 'andamento', 120);
+  let r;
+  try { r = fn(); } catch (err) { cache.remove(chave); throw err; }
+  if (r && r.ok) {
+    try { cache.put(chave, JSON.stringify(r), 600); } catch (e) { cache.remove(chave); }
+  } else {
+    cache.remove(chave);
+  }
+  return r;
+}
+
+// ======================= [OUT/2026] SESSÃO / PERMISSÕES =======================
+// Toda ação (menos a tela de login) exige o token devolvido por
+// loginAdmin/loginOperador. O token vive 6 horas no cache do script e é
+// renovado a cada uso. É o servidor — não mais só a tela — que decide
+// quem é o usuário, se ele é administrador e a qual unidade tem acesso.
+const ACOES_PUBLICAS = ['getUnidades', 'getUsuarios', 'loginAdmin', 'loginOperador'];
+const ACOES_ADMIN = [
+  'createEquipamento', 'updateEquipamento', 'deleteEquipamento',
+  'createResponsavel', 'deleteResponsavel', 'deleteChecklist', 'deleteTrocaGas',
+  'getNaoConformidades', 'updateStatusNaoConformidade',
+  'getRelatorio', 'gerarRelatorioPDF', 'getRelatorioGas',
+  'getRelatorioExecutivo', 'gerarRelatorioExecutivoPDF', 'getVisaoGeralUnidades', 'gerarManutencaoPDF', 'gerarChecklistsPDF', 'getPrestadores', 'gerarPrestadoresPDF',
+  'getComparativoUnidades', 'savePergunta', 'deletePergunta', 'deleteCarregamento'
+];
+const SESSAO_TTL_SEGUNDOS = 21600;
+
+// [ESTABILIDADE OUT/2026] O token agora é ASSINADO e carrega quem é o
+// usuário — não fica mais guardado no cache do script. Antes, a sessão
+// vivia só no CacheService, que o Google pode esvaziar a qualquer momento
+// (e que dura no máximo 6h): era isso que derrubava o usuário para a tela
+// de login no meio do uso. Agora a sessão vale 7 dias, não depende de
+// cache e não custa mais uma gravação a cada pedido.
+// A cada pedido o servidor ainda confere na planilha se o usuário continua
+// ATIVO e qual é o tipo/unidade dele — e, para o admin, a senha entra na
+// assinatura: trocou a senha, as sessões antigas dele deixam de valer.
+const SESSAO_DIAS = 7;
+
+function segredoSessao_() {
+  const cache = CacheService.getScriptCache();
+  let s = cache.get('sessao_segredo');
+  if (s) return s;
+  const props = PropertiesService.getScriptProperties();
+  s = props.getProperty('SESSAO_SEGREDO');
+  if (!s) {
+    const lock = LockService.getScriptLock();
+    esperarTrava_(lock);
+    try {
+      s = props.getProperty('SESSAO_SEGREDO');
+      if (!s) { s = Utilities.getUuid() + Utilities.getUuid(); props.setProperty('SESSAO_SEGREDO', s); }
+    } finally { lock.releaseLock(); }
+  }
+  try { cache.put('sessao_segredo', s, 21600); } catch (e) { /* segue sem cache */ }
+  return s;
+}
+
+function assinarSessao_(corpo, usuario) {
+  const bytes = Utilities.computeHmacSha256Signature(corpo + '|' + String(usuario.SENHA || ''), segredoSessao_());
+  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, '');
+}
+
+function criarSessao_(usuario) {
+  const corpo = Utilities.base64EncodeWebSafe(JSON.stringify({
+    u: String(usuario.ID_USUARIO),
+    exp: Date.now() + SESSAO_DIAS * 86400000
+  })).replace(/=+$/, '');
+  const token = 'v2.' + corpo + '.' + assinarSessao_(corpo, usuario);
+  return Object.assign({ token: token }, sessaoDoUsuario_(usuario));
+}
+
+function sessaoDoUsuario_(usuario) {
+  return {
+    ID_USUARIO: usuario.ID_USUARIO,
+    NOME: usuario.NOME,
+    USUARIO: usuario.USUARIO,
+    TIPO: String(usuario.TIPO || 'OPERADOR').toUpperCase(),
+    UNIDADE: usuario.UNIDADE,
+    SETOR: setorDoUsuario_(usuario) // '' = os dois setores
+  };
+}
+
+// Usuário preso a um setor não entra nem consulta o outro.
+function exigirSetorDoUsuario_(usuario) {
+  const doUsuario = setorDoUsuario_(usuario);
+  if (doUsuario && SETOR_PEDIDO_ && SETOR_PEDIDO_ !== doUsuario) {
+    throw new Error('Este usuário é do setor ' + rotuloSetor_(doUsuario) + ' e não tem acesso ao setor ' + rotuloSetor_(SETOR_PEDIDO_) + '.');
+  }
+}
+
+// Devolve a sessão do token, ou null se ele não vale (adulterado, vencido,
+// usuário inativo ou senha trocada).
+function lerSessao_(token) {
+  const t = String(token || '').trim();
+  if (!t) return null;
+  if (t.indexOf('v2.') !== 0) {
+    // Token do formato antigo (guardado no cache): continua valendo até
+    // vencer, para ninguém ser derrubado no dia da atualização.
+    const bruto = CacheService.getScriptCache().get('tok_' + t);
+    return bruto ? JSON.parse(bruto) : null;
+  }
+  const partes = t.split('.');
+  if (partes.length !== 3) return null;
+  let dados;
+  try {
+    dados = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(partes[1])).getDataAsString());
+  } catch (e) { return null; }
+  if (!dados || !dados.u || !(Number(dados.exp) > Date.now())) return null;
+  const usuario = getUsuariosCache_().find(function (x) { return String(x.ID_USUARIO) === String(dados.u); });
+  if (!usuario || String(usuario.ATIVO).toUpperCase() !== 'SIM') return null;
+  if (assinarSessao_(partes[1], usuario) !== partes[2]) return null;
+  return sessaoDoUsuario_(usuario);
+}
+
+function autenticar_(action, params, token) {
+  if (ACOES_PUBLICAS.indexOf(action) > -1) return null;
+  const sessao = lerSessao_(token);
+  if (!sessao) throw new Error('Sessão expirada. Entre novamente.');
+
+  if (ACOES_ADMIN.indexOf(action) > -1 && sessao.TIPO !== 'ADMIN') {
+    throw new Error('Ação restrita ao administrador.');
+  }
+  if (!ehTodasUnidades_(sessao.UNIDADE)) {
+    if (action === 'getVisaoGeralUnidades' || action === 'getComparativoUnidades') throw new Error('Sem acesso à visão de todas as unidades.');
+    if (params.unidade !== undefined && params.unidade !== null &&
+        String(params.unidade).trim() !== String(sessao.UNIDADE).trim()) {
+      throw new Error('Este usuário não tem acesso à unidade ' + params.unidade + '.');
+    }
+  }
+  if (sessao.SETOR && SETOR_PEDIDO_ && SETOR_PEDIDO_ !== sessao.SETOR) {
+    throw new Error('Este usuário é do setor ' + rotuloSetor_(sessao.SETOR) + ' e não tem acesso ao setor ' + rotuloSetor_(SETOR_PEDIDO_) + '.');
+  }
+  // O usuário da ação é sempre o da sessão — o que o app mandar é ignorado.
+  params.idUsuario = sessao.ID_USUARIO;
+  params._tipoSessao = sessao.TIPO; // usado para barrar mudança de status por operador
+  params._setorSessao = sessao.SETOR || ''; // '' = usuário com acesso aos dois setores
+  return sessao;
+}
+
+// [ESTABILIDADE OUT/2026] Espera a trava do script; se o servidor estiver
+// muito ocupado, devolve uma mensagem clara em vez do erro em inglês do Google.
+function esperarTrava_(lock) {
+  try { lock.waitLock(20000); }
+  catch (e) { throw new Error('O servidor está ocupado com outros registros. Aguarde alguns segundos e tente de novo.'); }
 }
 
 function jsonOut_(obj) {
@@ -193,23 +442,63 @@ function jsonOut_(obj) {
 // Roteador único da API. Ações de leitura rodam sem trava; ações que
 // escrevem na planilha pegam a trava do script para não haver duas
 // gravações simultâneas gerando o mesmo ID.
-function routeAction_(action, params) {
+//
+// [PERF 14/09] A trava só precisa proteger o trecho que gera o ID
+// sequencial e grava a linha (nextId_/nextIds_/appendRow_/appendRows_) —
+// não precisa proteger validações (só leitura), upload de foto no Drive
+// nem envio de e-mail, que não competem por gravar a mesma linha. As
+// ações abaixo (createEquipamento, createChecklist, createManutencao,
+// createLavagem, createTrocaGas) já cuidam da própria trava internamente,
+// com `comTravaEscrita_`, só ao redor do trecho crítico — por isso NÃO
+// pegam a trava aqui no roteador (pegariam a trava duas vezes à toa).
+// As demais escritas (update/delete) são rápidas (uma leitura + uma
+// gravação, sem Drive/e-mail) e continuam usando a trava do roteador,
+// mais simples.
+function routeAction_(action, params, token) {
+  // [SETOR OUT/2026] Setor escolhido no login (Fábrica / Operação). Fica
+  // guardado durante este pedido e é aplicado por filtrarPorUnidade_ em
+  // todas as consultas — ver "HELPERS DE SETOR".
+  SETOR_PEDIDO_ = normalizarSetor_(params && params.setor);
+  MAPA_SETOR_EQUIP_ = null;
+  MEMO_ABAS_ = {};
+  garantirEstrutura_();
+  params = params || {};
+  autenticar_(action, params, token);
   const readOnlyActions = [
+    'loginAdmin', 'loginOperador',
     'getUnidades', 'getUsuarios', 'getResponsaveis', 'getEquipamentos',
     'getTiposEquipamento', 'getChecklistItensModelo', 'getChecklists',
     'getChecklistDetalhe', 'getNaoConformidades', 'getManutencoes',
-    'getPainel', 'getRelatorio', 'getHistorico'
+    'getPainel', 'getRelatorio', 'getHistorico',
+    'getLavagemItensModelo', 'getLavagens', 'getFornecedoresGas',
+    'getTrocasGas', 'getRelatorioGas', 'getRelatorioExecutivo',
+    'getVisaoGeralUnidades', 'getComparativoUnidades', 'getPerguntas', 'getPendenciasEquipamento', 'getCarregamentos',
+    // Geração de PDF só lê dados e monta o arquivo — não grava linha nova
+    // na planilha, então não precisa da trava. Antes disso, gerar um PDF
+    // (que pode levar dezenas de segundos por causa dos gráficos/Slides)
+    // travava TODO mundo (qualquer unidade) que tentasse abrir checklist,
+    // manutenção, lavagem ou troca de gás ao mesmo tempo.
+    'gerarRelatorioPDF', 'gerarRelatorioExecutivoPDF', 'gerarManutencaoPDF', 'gerarChecklistsPDF', 'getPrestadores', 'gerarPrestadoresPDF'
   ];
-  const precisaTrava = readOnlyActions.indexOf(action) === -1;
+  // [PERF 14/09] Ações que já gerenciam a própria trava internamente
+  // (ver comentário acima) — o roteador não deve pegar a trava para elas.
+  const acoesComTravaInterna = [
+    'createEquipamento', 'createChecklist', 'createManutencao',
+    'createLavagem', 'createTrocaGas',
+    'updateManutencao' // [FLUXO OUT/2026] manda e-mail a cada mudança de status — fica fora da trava
+  ];
+  const precisaTrava = readOnlyActions.indexOf(action) === -1 &&
+    acoesComTravaInterna.indexOf(action) === -1;
   const lock = LockService.getScriptLock();
-  if (precisaTrava) lock.waitLock(20000);
+  if (precisaTrava) esperarTrava_(lock);
 
   try {
     switch (action) {
       // ---- configuração / login ----
       case 'getUnidades': return { ok: true, data: getUnidades_() };
-      case 'getUsuarios': return { ok: true, data: getUsuarios_(params.unidade) };
+      case 'getUsuarios': return { ok: true, data: getUsuarios_(params.unidade, SETOR_PEDIDO_) };
       case 'loginAdmin': return loginAdmin_(params);
+      case 'loginOperador': return loginOperador_(params);
 
       // ---- responsáveis do checklist ----
       case 'getResponsaveis': return { ok: true, data: getResponsaveis_(params.unidade) };
@@ -224,10 +513,13 @@ function routeAction_(action, params) {
       case 'deleteEquipamento': return deletarEquipamento_(params);
 
       // ---- checklists ----
-      case 'getChecklistItensModelo': return { ok: true, data: CHECKLIST_ITENS_PADRAO };
+      case 'getChecklistItensModelo': return { ok: true, data: perguntasDoTipo_('checklist', params.tipo) };
       case 'getChecklists': return { ok: true, data: getChecklists_(params) };
       case 'getChecklistDetalhe': return { ok: true, data: getChecklistDetalhe_(params.idChecklist) };
       case 'createChecklist': return criarChecklist_(params);
+      case 'closeChecklist': return fecharChecklist_(params);
+      case 'getPendenciasEquipamento': return { ok: true, data: getPendenciasEquipamento_(params) };
+      case 'deleteChecklist': return deletarChecklist_(params);
 
       // ---- não conformidades ----
       case 'getNaoConformidades': return { ok: true, data: getNaoConformidades_(params) };
@@ -236,12 +528,47 @@ function routeAction_(action, params) {
       // ---- manutenções ----
       case 'getManutencoes': return { ok: true, data: getManutencoes_(params) };
       case 'createManutencao': return criarManutencao_(params);
-      case 'updateManutencao': return atualizarManutencao_(params);
+      case 'updateManutencao': {
+        // Chamado finalizado fecha a não conformidade que deu origem a ele.
+        const resManut = atualizarManutencao_(params);
+        fecharNcsDaManutencao_(params.idManutencao);
+        return resManut;
+      }
+
+      // ---- lavagem ----
+      case 'getLavagemItensModelo': return { ok: true, data: perguntasDoTipo_('lavagem', params.tipo) };
+
+      // ---- perguntas do checklist / lavagem por tipo de equipamento ----
+      case 'getPerguntas': return { ok: true, data: getPerguntas_(params) };
+      case 'savePergunta': return salvarPergunta_(params);
+      case 'deletePergunta': return deletarPergunta_(params);
+      case 'getLavagens': return { ok: true, data: getLavagens_(params) };
+      case 'createLavagem': return criarLavagem_(params);
+
+      // ---- troca de gás ----
+      case 'getFornecedoresGas': return { ok: true, data: getFornecedoresGas_(params.unidade) };
+      case 'getTrocasGas': return { ok: true, data: getTrocasGas_(params) };
+      case 'createTrocaGas': return criarTrocaGas_(params);
+      case 'deleteTrocaGas': return deletarTrocaGas_(params);
+
+      // ---- carregamento de bateria (máquinas elétricas) ----
+      case 'getCarregamentos': return { ok: true, data: getCarregamentos_(params) };
+      case 'createCarregamento': return criarCarregamento_(params);
+      case 'deleteCarregamento': return deletarCarregamento_(params);
 
       // ---- painel, relatórios e histórico ----
+      case 'getVisaoGeralUnidades': return { ok: true, data: getVisaoGeralUnidades_() };
+      case 'getComparativoUnidades': return { ok: true, data: getComparativoUnidades_(params) };
       case 'getPainel': return { ok: true, data: getPainel_(params) };
       case 'getRelatorio': return { ok: true, data: getRelatorio_(params) };
       case 'gerarRelatorioPDF': return { ok: true, data: gerarRelatorioPDF_(params) };
+      case 'getRelatorioGas': return { ok: true, data: getRelatorioGas_(params) };
+      case 'getRelatorioExecutivo': return { ok: true, data: getRelatorioExecutivo_(params) };
+      case 'gerarRelatorioExecutivoPDF': return { ok: true, data: gerarRelatorioExecutivoPDF_(params) };
+      case 'gerarManutencaoPDF': return { ok: true, data: gerarManutencaoPDF_(params) };
+      case 'gerarChecklistsPDF': return { ok: true, data: gerarChecklistsPDF_(params) };
+      case 'getPrestadores': return { ok: true, data: getPrestadores_(params) };
+      case 'gerarPrestadoresPDF': return { ok: true, data: gerarPrestadoresPDF_(params) };
       case 'getHistorico': return { ok: true, data: getHistorico_(params) };
 
       default: return { ok: false, error: 'Ação desconhecida: ' + action };
@@ -253,9 +580,40 @@ function routeAction_(action, params) {
   }
 }
 
+// [PERF 14/09] Pega a trava do script só para o trecho crítico passado em
+// `fn` (tipicamente: gerar ID sequencial + gravar a linha), executa e
+// solta a trava logo em seguida — mesmo em caso de erro. Usada pelas
+// ações de criação que também fazem upload de foto no Drive e/ou envio de
+// e-mail, para essas partes lentas ficarem FORA da trava (ver comentário
+// em routeAction_).
+function comTravaEscrita_(fn) {
+  const lock = LockService.getScriptLock();
+  esperarTrava_(lock);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ======================= HELPERS DE PLANILHA =======================
 
+// [ESTABILIDADE OUT/2026] Memória do pedido: dentro de um mesmo pedido,
+// cada aba é lida da planilha UMA vez só. Relatório, painel e histórico
+// liam a mesma aba 2 ou 3 vezes (uma por conta), e cada leitura é uma
+// ida ao Google Sheets — era boa parte da demora dessas telas.
+// Seguro por construção: qualquer função que pega a aba para GRAVAR passa
+// por sheet_(), que apaga a memória daquela aba; a leitura seguinte busca
+// de novo na planilha. Cada chamada devolve cópias das linhas, para uma
+// conta não alterar os dados que a outra vai usar.
+var MEMO_ABAS_ = {};
+
 function sheet_(name) {
+  delete MEMO_ABAS_[name];
+  return abaSemEsquecer_(name);
+}
+
+function abaSemEsquecer_(name) {
   const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sh) throw new Error('A aba "' + name + '" não existe na planilha. Rode a função configurarPlanilha() uma vez no editor do Apps Script.');
   return sh;
@@ -266,7 +624,12 @@ function sheet_(name) {
 // na célula em um valor de data real. Aqui qualquer Date volta para texto
 // ISO, para o app sempre receber o mesmo formato.
 function readSheet_(name) {
-  const sh = sheet_(name);
+  if (!MEMO_ABAS_[name]) MEMO_ABAS_[name] = lerAbaDaPlanilha_(name);
+  return MEMO_ABAS_[name].map(function (linha) { return Object.assign({}, linha); });
+}
+
+function lerAbaDaPlanilha_(name) {
+  const sh = abaSemEsquecer_(name);
   const valores = sh.getDataRange().getValues();
   if (!valores.length) return [];
   const headers = valores[0];
@@ -303,6 +666,11 @@ function appendRows_(sheetName, rowObjs) {
 }
 
 // Atualiza campos de uma linha identificada por um valor de ID numa coluna.
+// [PERF 14/09] Antes gravava célula por célula (.setValue() em loop — uma
+// chamada ao serviço de planilhas por campo alterado). Agora monta a linha
+// inteira já com as mudanças aplicadas e grava tudo de uma vez com
+// .setValues(), numa única chamada, independentemente de quantos campos
+// mudaram.
 function updateRowById_(sheetName, idColumn, idValue, updates) {
   const sh = sheet_(sheetName);
   const valores = sh.getDataRange().getValues();
@@ -311,10 +679,12 @@ function updateRowById_(sheetName, idColumn, idValue, updates) {
   if (idIdx === -1) return false;
   for (let i = 1; i < valores.length; i++) {
     if (String(valores[i][idIdx]) === String(idValue)) {
+      const linha = valores[i].slice();
       Object.keys(updates).forEach(function (key) {
         const colIdx = headers.indexOf(key);
-        if (colIdx > -1) sh.getRange(i + 1, colIdx + 1).setValue(updates[key]);
+        if (colIdx > -1) linha[colIdx] = updates[key];
       });
+      sh.getRange(i + 1, 1, 1, linha.length).setValues([linha]);
       return true;
     }
   }
@@ -511,9 +881,21 @@ function dentroDoPeriodo_(valor, janela) {
 
 // ======================= HELPERS DE FOTO (Google Drive) =======================
 
+// [PERF 14/09] Antes fazia uma busca no Drive (DriveApp.getFoldersByName)
+// a cada foto/relatório salvo. Agora guarda o ID da pasta em
+// PropertiesService na primeira vez e reusa depois — evita uma chamada
+// lenta ao Drive em toda operação que salva foto ou gera PDF.
 function pastaPorNome_(nome) {
+  const props = PropertiesService.getScriptProperties();
+  const chave = 'pastaId_' + nome;
+  const idSalvo = props.getProperty(chave);
+  if (idSalvo) {
+    try { return DriveApp.getFolderById(idSalvo); } catch (e) { /* pasta foi apagada/movida: recria abaixo */ }
+  }
   const pastas = DriveApp.getFoldersByName(nome);
-  return pastas.hasNext() ? pastas.next() : DriveApp.createFolder(nome);
+  const pasta = pastas.hasNext() ? pastas.next() : DriveApp.createFolder(nome);
+  props.setProperty(chave, pasta.getId());
+  return pasta;
 }
 
 // Recebe a foto em base64 (data URL vinda do app), salva como arquivo numa
@@ -559,23 +941,162 @@ function ehTodasUnidades_(unidade) {
 // Isolamento por unidade: filtra qualquer lista de registros pela unidade
 // pedida. "TODAS" (gerente/coordenador) devolve tudo, sem filtro.
 function filtrarPorUnidade_(rows, unidade) {
-  if (ehTodasUnidades_(unidade)) return rows;
+  if (ehTodasUnidades_(unidade)) return filtrarPorSetor_(rows);
   const alvo = String(unidade || '').trim();
   if (!alvo) return [];
-  return rows.filter(function (r) { return String(r.UNIDADE || '').trim() === alvo; });
+  return filtrarPorSetor_(rows.filter(function (r) { return String(r.UNIDADE || '').trim() === alvo; }));
+}
+
+// ======================= HELPERS DE SETOR =======================
+// [SETOR OUT/2026] Segundo nível de separação, abaixo da unidade:
+// FABRICA ou OPERACAO. O setor mora no EQUIPAMENTO (coluna SETOR da aba
+// EQUIPAMENTOS). Checklists, manutenções, não conformidades, lavagens,
+// trocas de gás e histórico "herdam" o setor do equipamento a que
+// pertencem — por isso nenhuma outra aba precisou de coluna nova, e tudo
+// que já estava registrado continua aparecendo no setor certo.
+// Equipamento com SETOR em branco conta como OPERACAO.
+
+const SETORES = ['FABRICA', 'OPERACAO'];
+const SETOR_PADRAO = 'OPERACAO';
+const SETOR_ROTULO = { FABRICA: 'Fábrica', OPERACAO: 'Operação' };
+var SETOR_PEDIDO_ = '';     // setor do pedido em andamento ('' = sem filtro)
+var MAPA_SETOR_EQUIP_ = null; // { ID_EQUIPAMENTO: 'FABRICA' | 'OPERACAO' }, montado 1x por pedido
+
+// Aceita "Fábrica", "fabrica", "OPERAÇÃO", "Operacao"... e devolve
+// 'FABRICA', 'OPERACAO' ou '' (não reconhecido / em branco).
+function normalizarSetor_(valor) {
+  const t = String(valor === undefined || valor === null ? '' : valor)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+  return SETORES.indexOf(t) > -1 ? t : '';
+}
+
+function setorOuPadrao_(valor) { return normalizarSetor_(valor) || SETOR_PADRAO; }
+// Na aba de e-mails, SETOR = TODOS (ou TODAS) recebe os avisos dos dois setores.
+function setorEhTodos_(valor) {
+  const t = String(valor === undefined || valor === null ? '' : valor).trim().toUpperCase();
+  return t === 'TODOS' || t === 'TODAS';
+}
+function rotuloSetor_(setor) { return SETOR_ROTULO[setorOuPadrao_(setor)]; }
+
+function mapaSetorEquipamentos_() {
+  if (!MAPA_SETOR_EQUIP_) {
+    const mapa = {};
+    readSheet_(SHEETS.EQUIPAMENTOS).forEach(function (e) {
+      mapa[String(e.ID_EQUIPAMENTO)] = setorOuPadrao_(e.SETOR);
+    });
+    MAPA_SETOR_EQUIP_ = mapa;
+  }
+  return MAPA_SETOR_EQUIP_;
+}
+
+function setorDoEquipamento_(idEquipamento) {
+  return mapaSetorEquipamentos_()[String(idEquipamento)] || SETOR_PADRAO;
+}
+
+// Deixa só as linhas do setor do pedido. Linha sem ID_EQUIPAMENTO
+// (responsáveis do checklist, fornecedores de gás) é da unidade inteira e
+// não é filtrada. Pedido sem setor também não filtra nada.
+function filtrarPorSetor_(rows, setor) {
+  const alvo = setor === undefined ? SETOR_PEDIDO_ : normalizarSetor_(setor);
+  if (!alvo) return rows;
+  return rows.filter(function (r) {
+    if (r.ID_EQUIPAMENTO === undefined || r.ID_EQUIPAMENTO === '') return true;
+    return setorDoEquipamento_(r.ID_EQUIPAMENTO) === alvo;
+  });
+}
+
+// Cria a coluna SETOR (última coluna) nas abas EQUIPAMENTOS e
+// CONFIG_EMAILS_MANUTENCAO se ainda não existir, e preenche OPERACAO em
+// tudo que estiver em branco. Roda sozinha no primeiro pedido depois da
+// atualização (e nunca mais — fica marcada em PropertiesService), mas
+// também pode ser rodada à mão pelo editor: ▶ Executar > configurarSetores.
+function configurarSetores() {
+  [SHEETS.EQUIPAMENTOS, SHEETS.EMAILS_MANUTENCAO].forEach(function (nome) {
+    const sh = sheet_(nome);
+    const esperado = HEADERS[nome];
+    const col = esperado.indexOf('SETOR') + 1;
+    const ultimaCol = Math.max(sh.getLastColumn(), 1);
+    const cabecalho = sh.getRange(1, 1, 1, Math.max(ultimaCol, col)).getValues()[0];
+    const atual = String(cabecalho[col - 1] || '').trim();
+    if (atual !== 'SETOR') {
+      if (atual) {
+        throw new Error('A aba ' + nome + ' já tem a coluna "' + atual + '" na posição ' + col +
+          ', onde deveria entrar SETOR. Mova essa coluna para depois e rode configurarSetores() de novo.');
+      }
+      sh.getRange(1, col).setValue('SETOR').setFontWeight('bold');
+    }
+    const linhas = sh.getLastRow() - 1;
+    if (linhas > 0) {
+      const faixa = sh.getRange(2, col, linhas, 1);
+      const ids = sh.getRange(2, 1, linhas, 1).getValues();
+      const valores = faixa.getValues().map(function (v, i) {
+        if (String(ids[i][0]) === '') return [v[0]];
+        return [setorEhTodos_(v[0]) ? 'TODOS' : setorOuPadrao_(v[0])];
+      });
+      faixa.setValues(valores);
+    }
+  });
+  PropertiesService.getScriptProperties().setProperty('setor_v1_ok', 'SIM');
+  SpreadsheetApp.flush();
+  return 'Coluna SETOR pronta em EQUIPAMENTOS e CONFIG_EMAILS_MANUTENCAO. Tudo que estava em branco ficou como OPERACAO.';
+}
+
+// [ESTABILIDADE OUT/2026] Uma consulta de cache só por pedido confere as
+// duas migrações (SETOR e ACIONADO_EM).
+function garantirEstrutura_() {
+  let cache = null;
+  try {
+    cache = CacheService.getScriptCache();
+    if (cache.get('estrutura_ok_v8')) return;
+  } catch (e) { /* sem cache: confere do jeito longo */ }
+  garantirColunasSetor_();
+  garantirColunaAcionado_();
+  garantirColunasHorimetro_();
+  try {
+    if (PropertiesService.getScriptProperties().getProperty('usuarios_setor_v1_ok') !== 'SIM') configurarSetorUsuarios();
+  } catch (e) { /* rode configurarSetorUsuarios() à mão se a coluna não aparecer */ }
+  try {
+    const props = PropertiesService.getScriptProperties();
+    if (props.getProperty('setor_v1_ok') === 'SIM' && props.getProperty('fluxo_v1_ok') === 'SIM' &&
+        props.getProperty('usuarios_setor_v1_ok') === 'SIM' && props.getProperty('horimetro_v5_ok') === 'SIM' && cache) {
+      cache.put('estrutura_ok_v8', '1', 21600);
+    }
+  } catch (e) { /* tenta de novo no próximo pedido */ }
+}
+
+function garantirColunasSetor_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache.get('setor_v1_ok')) return;
+    if (PropertiesService.getScriptProperties().getProperty('setor_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('setor_v1_ok') !== 'SIM') configurarSetores();
+      } finally { lock.releaseLock(); }
+    }
+    cache.put('setor_v1_ok', '1', 21600);
+  } catch (e) { /* se falhar aqui, blank = OPERACAO segura a leitura; rode configurarSetores() à mão */ }
 }
 
 // Para CRIAR qualquer registro é obrigatório estar dentro de uma unidade
 // específica — nem mesmo um admin com acesso a TODAS pode gravar sem
 // escolher em qual unidade o registro entra.
+// [PERF 14/09] Antes relia readSheet_(SHEETS.UNIDADES) direto, ignorando
+// o cache de 120s que getUnidades_() já mantém — ou seja, toda escrita
+// (cadastrar equipamento, checklist, manutenção...) reabria a planilha do
+// zero só para confirmar que a unidade existe. Agora reaproveita
+// getUnidades_(), que já é cacheado. Unidades mudam raramente (cadastro
+// manual na planilha), então até 2 minutos de atraso para refletir uma
+// unidade nova/desativada é um preço bem baixo pelo ganho de velocidade.
 function exigirUnidade_(unidade) {
   const alvo = String(unidade || '').trim();
   if (!alvo) throw new Error('Informe a unidade para registrar.');
   if (ehTodasUnidades_(alvo)) {
     throw new Error('Selecione uma unidade específica antes de registrar (não é possível gravar em "TODAS").');
   }
-  const existe = readSheet_(SHEETS.UNIDADES).some(function (u) {
-    return String(u.UNIDADE).trim() === alvo && String(u.ATIVO).toUpperCase() === 'SIM';
+  const existe = getUnidades_().some(function (u) {
+    return String(u.UNIDADE).trim() === alvo;
   });
   if (!existe) throw new Error('Unidade não encontrada ou inativa: ' + alvo);
   return alvo;
@@ -585,9 +1106,21 @@ function exigirUnidade_(unidade) {
 // conferimos que aquele usuário realmente pertence à unidade em que está
 // tentando gravar (ou tem acesso a TODAS). Sem idUsuario, segue em frente —
 // o controle fica no frontend, como no app de referência.
+// [PERF 14/09] Cache de 120s da aba CONFIG_USUARIOS inteira (mesmo TTL
+// usado em getUnidades_/getUsuarios_), reaproveitado tanto por
+// validarAcessoUnidade_ (chamado em toda escrita) quanto por loginAdmin_.
+// Guarda a SENHA no cache (é a mesma que já está em texto simples na
+// planilha), mas ela nunca é devolvida ao frontend por nenhuma função
+// pública — só usada aqui, internamente, para conferir o login.
+function getUsuariosCache_() {
+  return cacheado_('usuarios_completo', 120, function () {
+    return readSheet_(SHEETS.USUARIOS);
+  });
+}
+
 function validarAcessoUnidade_(idUsuario, unidade) {
   if (!idUsuario) return;
-  const usuario = findRowById_(SHEETS.USUARIOS, 'ID_USUARIO', idUsuario);
+  const usuario = getUsuariosCache_().find(function (u) { return String(u.ID_USUARIO) === String(idUsuario); });
   if (!usuario) throw new Error('Usuário não encontrado.');
   if (String(usuario.ATIVO).toUpperCase() !== 'SIM') throw new Error('Usuário inativo.');
   if (ehTodasUnidades_(usuario.UNIDADE)) return;
@@ -612,6 +1145,43 @@ function textoLimpo_(valor) {
 }
 
 // Agrupa contando ocorrências por um campo (ex: quantas manutenções por status).
+// Utilização = horas rodadas (horímetro) ÷ horas sem manutenção. Quando dá
+// mais de 100% os dois números não cobrem o mesmo intervalo (ex.: a troca
+// de gás carrega horas rodadas antes do período, ou o histórico de status
+// começou depois) — aí é melhor não mostrar percentual nenhum.
+function utilizacaoPct_(operacaoMs, semManutencaoMs) {
+  const v = pct_(operacaoMs, semManutencaoMs);
+  return (v === null || v > 100) ? null : v;
+}
+
+// Percentual com 1 casa (null quando não há base para calcular).
+function pct_(parte, total) {
+  return total > 0 ? Math.round((parte / total) * 1000) / 10 : null;
+}
+
+// [FLUXO OUT/2026] Média, em horas de expediente, de cada etapa dos
+// chamados finalizados: abertura→acionamento, acionamento→início,
+// início→fim e total. Etapa sem carimbo num chamado fica fora da média
+// daquela etapa.
+function temposMediosManutencao_(manutencoes) {
+  const soma = { acionamento: [0, 0], chegada: [0, 0], execucao: [0, 0], total: [0, 0] };
+  const add = function (k, ms) { if (ms !== null && ms !== undefined) { soma[k][0] += ms; soma[k][1]++; } };
+  manutencoes.filter(function (m) { return String(m.STATUS) === 'concluida'; }).forEach(function (m) {
+    const t = anexarTemposManutencao_(Object.assign({}, m));
+    if (parseData_(m.ACIONADO_EM)) { add('acionamento', t.TEMPO_ACIONAMENTO_MS); add('chegada', t.TEMPO_CHEGADA_MS); }
+    add('execucao', t.TEMPO_EXECUCAO_MS);
+    add('total', t.TEMPO_TOTAL_MS);
+  });
+  const out = { finalizadas: soma.total[1] };
+  Object.keys(soma).forEach(function (k) {
+    const ms = soma[k][1] ? Math.round(soma[k][0] / soma[k][1]) : null;
+    out[k + 'Ms'] = ms;
+    out[k + 'Texto'] = ms === null ? '—' : formatarHoras_(ms);
+    out[k + 'Qtd'] = soma[k][1];
+  });
+  return out;
+}
+
 function agruparContagem_(rows, campo) {
   const out = {};
   (rows || []).forEach(function (r) {
@@ -623,57 +1193,124 @@ function agruparContagem_(rows, campo) {
 
 // ======================= CONFIGURAÇÃO: UNIDADES, USUÁRIOS, RESPONSÁVEIS =======================
 
+// Lê algo do cache do script (rapidíssimo, não abre a planilha) se ainda
+// estiver válido; senão roda fn(), guarda o resultado no cache por
+// ttlSegundos e devolve. Tela de login (Unidades/Usuários) é a primeira
+// coisa que qualquer pessoa espera ao abrir o app, então evitar reabrir a
+// planilha inteira (que pode ser lento se ela tiver muitas abas/fórmulas)
+// nessas duas chamadas específicas ajuda bastante na sensação de lentidão.
+function cacheado_(chave, ttlSegundos, fn) {
+  const cache = CacheService.getScriptCache();
+  const valor = cache.get(chave);
+  if (valor !== null) return JSON.parse(valor);
+  const resultado = fn();
+  try { cache.put(chave, JSON.stringify(resultado), ttlSegundos); } catch (e) { /* valor grande demais pro cache: ignora, sem quebrar a resposta */ }
+  return resultado;
+}
+
 function getUnidades_() {
-  return readSheet_(SHEETS.UNIDADES)
-    .filter(function (u) { return String(u.ATIVO).toUpperCase() === 'SIM'; })
-    .map(function (u) { return { ID_UNIDADE: u.ID_UNIDADE, UNIDADE: u.UNIDADE }; });
+  return cacheado_('unidades', 120, function () {
+    return readSheet_(SHEETS.UNIDADES)
+      .filter(function (u) { return String(u.ATIVO).toUpperCase() === 'SIM'; })
+      .map(function (u) { return { ID_UNIDADE: u.ID_UNIDADE, UNIDADE: u.UNIDADE }; });
+  });
 }
 
 // Lista os usuários que podem entrar na unidade escolhida. Quem tem
 // UNIDADE = 'TODAS' aparece na lista de qualquer unidade.
 // A coluna SENHA NUNCA é devolvida ao frontend.
-function getUsuarios_(unidade) {
+// [SETOR DO USUÁRIO OUT/2026] Coluna SETOR da aba CONFIG_USUARIOS:
+// FABRICA ou OPERACAO prende o usuário àquele setor — ele só aparece no
+// login daquele setor e o servidor recusa pedidos dele para o outro.
+// Em branco ou TODOS = os dois setores (use para admin/gerente).
+function setorDoUsuario_(usuario) {
+  return setorEhTodos_(usuario.SETOR) ? '' : normalizarSetor_(usuario.SETOR);
+}
+
+function getUsuarios_(unidade, setor) {
   const alvo = textoLimpo_(unidade);
-  return readSheet_(SHEETS.USUARIOS)
-    .filter(function (u) {
-      if (String(u.ATIVO).toUpperCase() !== 'SIM') return false;
-      if (ehTodasUnidades_(u.UNIDADE)) return true;
-      if (!alvo || ehTodasUnidades_(alvo)) return true;
-      return String(u.UNIDADE).trim() === alvo;
-    })
-    .map(function (u) {
-      return {
-        ID_USUARIO: u.ID_USUARIO,
-        NOME: u.NOME,
-        USUARIO: u.USUARIO,
-        TIPO: String(u.TIPO || 'OPERADOR').toUpperCase(),
-        UNIDADE: u.UNIDADE
-      };
-    });
+  const setorAlvo = normalizarSetor_(setor);
+  return cacheado_('usuarios_' + alvo + '_' + setorAlvo, 120, function () {
+    return readSheet_(SHEETS.USUARIOS)
+      .filter(function (u) {
+        if (String(u.ATIVO).toUpperCase() !== 'SIM') return false;
+        const doSetor = setorDoUsuario_(u);
+        if (setorAlvo && doSetor && doSetor !== setorAlvo) return false;
+        if (ehTodasUnidades_(u.UNIDADE)) return true;
+        if (!alvo || ehTodasUnidades_(alvo)) return true;
+        return String(u.UNIDADE).trim() === alvo;
+      })
+      .map(function (u) {
+        return {
+          ID_USUARIO: u.ID_USUARIO,
+          NOME: u.NOME,
+          USUARIO: u.USUARIO,
+          TIPO: String(u.TIPO || 'OPERADOR').toUpperCase(),
+          UNIDADE: u.UNIDADE,
+          SETOR: setorDoUsuario_(u)
+        };
+      });
+  });
+}
+
+// Cria o cabeçalho SETOR na aba CONFIG_USUARIOS (primeira coluna livre) se
+// ainda não existir. Não preenche nada: em branco = os dois setores.
+// Roda sozinha no primeiro pedido; também pode ser rodada à mão no editor.
+function configurarSetorUsuarios() {
+  const sh = sheet_(SHEETS.USUARIOS);
+  const largura = Math.max(sh.getLastColumn(), 1);
+  const cab = sh.getRange(1, 1, 1, largura).getValues()[0].map(function (h) { return String(h || '').trim(); });
+  if (cab.indexOf('SETOR') === -1) {
+    let col = cab.length + 1;
+    for (let i = 0; i < cab.length; i++) { if (!cab[i]) { col = i + 1; break; } }
+    sh.getRange(1, col).setValue('SETOR').setFontWeight('bold');
+  }
+  PropertiesService.getScriptProperties().setProperty('usuarios_setor_v1_ok', 'SIM');
+  try { CacheService.getScriptCache().remove('usuarios_completo'); } catch (e) { /* expira sozinho */ }
+  SpreadsheetApp.flush();
+  return 'Coluna SETOR pronta na aba CONFIG_USUARIOS. Preencha FABRICA ou OPERACAO em cada operador (em branco = os dois).';
 }
 
 // Só o ADMIN tem senha conferida. O OPERADOR entra escolhendo o nome na
 // lista devolvida por getUsuarios (sem senha nenhuma) — é assim de
 // propósito, replicando o app de referência.
 function loginAdmin_(params) {
-  const usuario = readSheet_(SHEETS.USUARIOS).find(function (u) {
+  const usuario = getUsuariosCache_().find(function (u) {
     return String(u.ID_USUARIO) === String(params.idUsuario) && String(u.ATIVO).toUpperCase() === 'SIM';
   });
   if (!usuario) return { ok: false, error: 'Usuário não encontrado.' };
   if (String(usuario.TIPO).toUpperCase() !== 'ADMIN') {
     return { ok: false, error: 'Este usuário não é administrador.' };
   }
-  if (String(usuario.SENHA) !== String(params.senha)) return { ok: false, error: 'Senha incorreta.' };
-  return {
-    ok: true,
-    data: {
-      ID_USUARIO: usuario.ID_USUARIO,
-      NOME: usuario.NOME,
-      USUARIO: usuario.USUARIO,
-      TIPO: String(usuario.TIPO).toUpperCase(),
-      UNIDADE: usuario.UNIDADE
-    }
-  };
+  // [OUT/2026] 5 senhas erradas seguidas bloqueiam o usuário por 15 minutos.
+  const cache = CacheService.getScriptCache();
+  const chaveFalha = 'falha_' + usuario.ID_USUARIO;
+  const falhas = Number(cache.get(chaveFalha) || 0);
+  if (falhas >= 5) {
+    return { ok: false, error: 'Muitas tentativas com senha errada. Aguarde 15 minutos e tente de novo.' };
+  }
+  if (String(usuario.SENHA) !== String(params.senha)) {
+    cache.put(chaveFalha, String(falhas + 1), 900);
+    return { ok: false, error: 'Senha incorreta.' };
+  }
+  cache.remove(chaveFalha);
+  exigirSetorDoUsuario_(usuario);
+  return { ok: true, data: criarSessao_(usuario) };
+}
+
+// [OUT/2026] O operador continua entrando sem senha (só escolhe o nome),
+// mas agora também recebe um token de sessão — com perfil OPERADOR, que o
+// servidor usa para barrar as ações de administrador.
+function loginOperador_(params) {
+  const usuario = getUsuariosCache_().find(function (u) {
+    return String(u.ID_USUARIO) === String(params.idUsuario) && String(u.ATIVO).toUpperCase() === 'SIM';
+  });
+  if (!usuario) return { ok: false, error: 'Usuário não encontrado.' };
+  if (String(usuario.TIPO || 'OPERADOR').toUpperCase() !== 'OPERADOR') {
+    return { ok: false, error: 'Este usuário precisa entrar com senha.' };
+  }
+  exigirSetorDoUsuario_(usuario);
+  return { ok: true, data: criarSessao_(usuario) };
 }
 
 // Responsáveis são os nomes selecionáveis no campo "Responsável" do
@@ -755,6 +1392,10 @@ function getEquipamentos_(params) {
     .sort(function (a, b) { return String(a.NOME).localeCompare(String(b.NOME)); });
 }
 
+// [PERF 14/09] Validações (unidade, acesso, duplicidade de código) rodam
+// fora da trava — só leem dados, não competem por gravar a mesma linha.
+// A trava (comTravaEscrita_) protege só a geração do ID + a gravação da
+// linha, que é o trecho que realmente precisa de exclusividade.
 function criarEquipamento_(p) {
   const unidade = exigirUnidade_(p.unidade);
   validarAcessoUnidade_(p.idUsuario, unidade);
@@ -766,6 +1407,8 @@ function criarEquipamento_(p) {
   if (STATUS_EQUIPAMENTO.indexOf(status) === -1) {
     throw new Error('Status inválido: ' + status + '. Use em_uso, manutencao, parado ou inativo.');
   }
+  const setor = normalizarSetor_(p.setor);
+  if (!setor) throw new Error('Informe o setor do equipamento: Fábrica ou Operação.');
   const codigo = textoLimpo_(p.codigo);
   if (codigo) {
     const duplicado = readSheet_(SHEETS.EQUIPAMENTOS).some(function (e) {
@@ -776,19 +1419,26 @@ function criarEquipamento_(p) {
   }
 
   const agora = nowIso_();
-  const idEquipamento = nextId_('EQP');
-  const registro = {
-    ID_EQUIPAMENTO: idEquipamento,
-    UNIDADE: unidade,
-    NOME: nome,
-    CODIGO: codigo,
-    TIPO: tipo,
-    STATUS: status,
-    STATUS_DESDE: agora,
-    OBSERVACOES: textoLimpo_(p.observacoes),
-    CRIADO_EM: agora
-  };
-  appendRow_(SHEETS.EQUIPAMENTOS, registro);
+  const registro = comTravaEscrita_(function () {
+    const idEquipamento = nextId_('EQP');
+    const r = {
+      ID_EQUIPAMENTO: idEquipamento,
+      UNIDADE: unidade,
+      NOME: nome,
+      CODIGO: codigo,
+      TIPO: tipo,
+      STATUS: status,
+      STATUS_DESDE: agora,
+      OBSERVACOES: textoLimpo_(p.observacoes),
+      CRIADO_EM: agora,
+      SETOR: setor,
+      MOTORIZACAO: motorizacao_(p.motorizacao)
+    };
+    appendRow_(SHEETS.EQUIPAMENTOS, r);
+    registrarHistoricoStatus_(r, '', status, agora);
+    return r;
+  });
+  invalidarCachePainel_(unidade);
   return { ok: true, data: registro };
 }
 
@@ -810,6 +1460,12 @@ function atualizarEquipamento_(p) {
   if (p.codigo !== undefined) updates.CODIGO = textoLimpo_(p.codigo);
   if (p.tipo !== undefined) updates.TIPO = textoLimpo_(p.tipo) || 'Outro';
   if (p.observacoes !== undefined) updates.OBSERVACOES = textoLimpo_(p.observacoes);
+  if (p.motorizacao !== undefined && p.motorizacao !== null && p.motorizacao !== '') updates.MOTORIZACAO = motorizacao_(p.motorizacao);
+  // [SETOR OUT/2026] Trocar o setor move o equipamento — e todo o
+  // histórico dele — para o outro setor.
+  const novoSetor = normalizarSetor_(p.setor);
+  const mudouSetor = !!novoSetor && novoSetor !== setorOuPadrao_(atual.SETOR);
+  if (novoSetor) updates.SETOR = novoSetor;
 
   if (p.status !== undefined) {
     const status = textoLimpo_(p.status);
@@ -817,7 +1473,10 @@ function atualizarEquipamento_(p) {
       throw new Error('Status inválido: ' + status + '. Use em_uso, manutencao, parado ou inativo.');
     }
     updates.STATUS = status;
-    if (status !== String(atual.STATUS)) updates.STATUS_DESDE = nowIso_();
+    if (status !== String(atual.STATUS)) {
+      updates.STATUS_DESDE = nowIso_();
+      registrarHistoricoStatus_(atual, atual.STATUS, status, updates.STATUS_DESDE);
+    }
   }
 
   // Mudou o nome do equipamento? Os registros ligados a ele guardam o nome
@@ -826,10 +1485,16 @@ function atualizarEquipamento_(p) {
   if (updates.NOME && updates.NOME !== String(atual.NOME)) {
     propagarNomeEquipamento_(id, updates.NOME);
   }
+  if (updates.STATUS || mudouSetor) invalidarCachePainel_(atual.UNIDADE); // status ou setor mudou → contadores do Painel mudaram
+  MAPA_SETOR_EQUIP_ = null;
 
   return { ok: true, data: findRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', id) };
 }
 
+// [PERF 14/09] Antes gravava uma célula por linha afetada, num loop
+// (.setValue() célula a célula). Agora acumula todas as linhas que
+// precisam mudar e grava a coluna NOME_EQUIPAMENTO inteira de uma vez com
+// .setValues() — uma chamada por aba, não uma por linha.
 function propagarNomeEquipamento_(idEquipamento, novoNome) {
   [SHEETS.CHECKLISTS, SHEETS.NAO_CONFORMIDADES, SHEETS.MANUTENCOES].forEach(function (aba) {
     const sh = sheet_(aba);
@@ -838,11 +1503,26 @@ function propagarNomeEquipamento_(idEquipamento, novoNome) {
     const idxId = headers.indexOf('ID_EQUIPAMENTO');
     const idxNome = headers.indexOf('NOME_EQUIPAMENTO');
     if (idxId === -1 || idxNome === -1) return;
+
+    // Descobre a primeira e a última linha deste equipamento nesta aba,
+    // para gravar um único bloco contíguo (mesmo que existam linhas de
+    // outros equipamentos misturadas no meio, que mantêm seu valor original).
+    let primeiraLinha = -1;
+    let ultimaLinha = -1;
     for (let i = 1; i < valores.length; i++) {
-      if (String(valores[i][idxId]) === String(idEquipamento) && String(valores[i][idxNome]) !== novoNome) {
-        sh.getRange(i + 1, idxNome + 1).setValue(novoNome);
+      if (String(valores[i][idxId]) === String(idEquipamento)) {
+        if (primeiraLinha === -1) primeiraLinha = i;
+        ultimaLinha = i;
       }
     }
+    if (primeiraLinha === -1) return; // nenhuma linha desse equipamento nesta aba
+
+    const coluna = [];
+    for (let i = primeiraLinha; i <= ultimaLinha; i++) {
+      const ehDesteEquipamento = String(valores[i][idxId]) === String(idEquipamento);
+      coluna.push([ehDesteEquipamento ? novoNome : valores[i][idxNome]]);
+    }
+    sh.getRange(primeiraLinha + 1, idxNome + 1, coluna.length, 1).setValues(coluna);
   });
 }
 
@@ -861,7 +1541,10 @@ function deletarEquipamento_(p) {
   });
 
   if (temVinculo) {
-    updateRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', id, { STATUS: 'inativo', STATUS_DESDE: nowIso_() });
+    const agora = nowIso_();
+    updateRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', id, { STATUS: 'inativo', STATUS_DESDE: agora });
+    registrarHistoricoStatus_(atual, atual.STATUS, 'inativo', agora);
+    invalidarCachePainel_(atual.UNIDADE);
     return {
       ok: true,
       data: {
@@ -871,6 +1554,7 @@ function deletarEquipamento_(p) {
     };
   }
   removeRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', id);
+  invalidarCachePainel_(atual.UNIDADE);
   return { ok: true, data: { ID_EQUIPAMENTO: id, excluido: true, inativado: false } };
 }
 
@@ -929,6 +1613,15 @@ function getChecklistDetalhe_(idChecklist) {
  *    (equipamento + item), caso em que a duplicata é ignorada e o app é
  *    avisado de quais itens foram pulados.
  */
+// [PERF 14/09] Restruturado para tirar a parte lenta (upload de fotos no
+// Drive — até 1 por item reprovado + a do equipamento, cada uma 3
+// chamadas ao Drive) de dentro da trava. As fotos agora são salvas com um
+// nome provisório (não depende mais do ID do checklist, que só existe
+// depois) ANTES de pegar a trava; a trava (comTravaEscrita_) protege só a
+// geração dos IDs e a gravação das linhas — o trecho que realmente precisa
+// de exclusividade. Os IDs de não conformidade também passaram a ser
+// reservados em lote (nextIds_) e gravados com um único appendRows_, em
+// vez de um nextId_/appendRow_ por item reprovado.
 function criarChecklist_(p) {
   const unidade = exigirUnidade_(p.unidade);
   validarAcessoUnidade_(p.idUsuario, unidade);
@@ -936,9 +1629,14 @@ function criarChecklist_(p) {
   const equipamento = equipamentoDaUnidade_(p.idEquipamento, unidade);
   const responsavel = textoLimpo_(p.responsavel);
   if (!responsavel) throw new Error('Selecione o responsável pelo checklist.');
+  // [OUT/2026] Mesma regra do Painel: checklist só de equipamento em uso.
+  if (String(equipamento.STATUS) !== 'em_uso') {
+    throw new Error('Este equipamento não está "Em uso". Checklist só é feito em equipamento em operação.');
+  }
 
   const itens = Array.isArray(p.itens) ? p.itens : [];
   if (!itens.length) throw new Error('Nenhum item respondido no checklist.');
+  const ncsJaAbertas = ncsAbertasDoEquipamento_(equipamento.ID_EQUIPAMENTO);
 
   // Validação item a item ANTES de gravar qualquer coisa — assim um
   // checklist incompleto nunca deixa linhas soltas na planilha.
@@ -949,7 +1647,9 @@ function criarChecklist_(p) {
     if (RESPOSTAS_CHECKLIST.indexOf(resposta) === -1) {
       throw new Error('Responda "' + nome + '" com OK, NOK ou N/A.');
     }
-    if (resposta === 'nok') {
+    // [OUT/2026] Item que já tem não conformidade ABERTA nesta máquina não
+    // precisa de descrição nem foto de novo — o problema já está registrado.
+    if (resposta === 'nok' && !ncsJaAbertas[nome.toLowerCase()]) {
       if (!textoLimpo_(item.descricaoProblema)) {
         throw new Error('Descreva o problema do item "' + nome + '".');
       }
@@ -960,101 +1660,268 @@ function criarChecklist_(p) {
   });
 
   if (!p.fotoEquipamento) throw new Error('A foto do equipamento é obrigatória para concluir o checklist.');
+  const horimetroInicial = horimetroOpcional_(p.horimetroInicial, 'Horímetro inicial');
+  // Obrigatório: é dele (e do horímetro final, no fechamento) que sai o
+  // tempo que a máquina rodou no dia.
+  if (horimetroInicial === '') throw new Error('Informe o horímetro inicial da máquina.');
 
-  const idChecklist = nextId_('CHK');
   const agora = nowIso_();
   const temPendencia = itens.some(function (i) { return textoLimpo_(i.resposta).toLowerCase() === 'nok'; });
-  const fotoEquipamento = salvarFoto_(p.fotoEquipamento, idChecklist + '_equipamento');
+
+  // ---- Uploads no Drive, FORA da trava (nome provisório, sem depender do ID) ----
+  const baseTemp = String(equipamento.ID_EQUIPAMENTO) + '_' + new Date().getTime();
+  const fotoEquipamento = salvarFoto_(p.fotoEquipamento, baseTemp + '_equipamento');
   if (!fotoEquipamento) throw new Error('Não foi possível salvar a foto do equipamento. Tente novamente.');
 
-  appendRow_(SHEETS.CHECKLISTS, {
-    ID_CHECKLIST: idChecklist,
-    UNIDADE: unidade,
-    ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
-    NOME_EQUIPAMENTO: equipamento.NOME,
-    RESPONSAVEL: responsavel,
-    DATA_HORA: agora,
-    STATUS: temPendencia ? 'pendencia' : 'ok',
-    FOTO_EQUIPAMENTO: fotoEquipamento
-  });
-
-  // Mapa das NCs já abertas: chave equipamento + item (a regra de
-  // deduplicação pedida — só nasce outra depois que a anterior fechar).
-  const abertas = {};
-  readSheet_(SHEETS.NAO_CONFORMIDADES).forEach(function (nc) {
-    if (String(nc.STATUS) === 'aberta') {
-      abertas[String(nc.ID_EQUIPAMENTO) + '||' + textoLimpo_(nc.ITEM).toLowerCase()] = nc.ID_NC;
-    }
-  });
-
-  const linhasItens = [];
-  const ncCriadas = [];
-  const ncIgnoradas = [];
-  const idsItens = nextIds_('ITR', itens.length);
-
-  itens.forEach(function (item, indice) {
+  const fotosItens = itens.map(function (item) {
     const nome = textoLimpo_(item.item);
     const resposta = textoLimpo_(item.resposta).toLowerCase();
-    const instrucao = textoLimpo_(item.instrucao) || instrucaoPadraoDoItem_(nome);
-    const descricao = resposta === 'nok' ? textoLimpo_(item.descricaoProblema) : '';
-    const fotoProblema = resposta === 'nok'
-      ? salvarFoto_(item.fotoProblema, idChecklist + '_' + nome.replace(/[^\wÀ-ú]+/g, '_'))
-      : '';
+    if (resposta !== 'nok') return '';
+    return salvarFoto_(item.fotoProblema, baseTemp + '_' + nome.replace(/[^\w\u00C0-\u00fa]+/g, '_'));
+  });
 
-    linhasItens.push({
-      ID_ITEM_RESPOSTA: idsItens[indice],
+  // ---- Só agora pega a trava: gerar IDs + gravar as linhas ----
+  const resultado = comTravaEscrita_(function () {
+    const idChecklist = nextId_('CHK');
+    const idsItens = nextIds_('ITR', itens.length);
+    // Reserva de uma vez o máximo possível de IDs de NC (uma por item —
+    // pode sobrar ID reservado sem uso se algum item NOK for duplicidade
+    // ignorada, o que só deixa um pequeno "buraco" na numeração, sem
+    // custo real).
+    const idsNc = nextIds_('NC', itens.length);
+
+    appendRow_(SHEETS.CHECKLISTS, {
       ID_CHECKLIST: idChecklist,
-      ITEM: nome,
-      INSTRUCAO: instrucao,
-      RESPOSTA: resposta,
-      DESCRICAO_PROBLEMA: descricao,
-      FOTO_PROBLEMA: fotoProblema
-    });
-
-    if (resposta !== 'nok') return;
-
-    const chave = String(equipamento.ID_EQUIPAMENTO) + '||' + nome.toLowerCase();
-    if (abertas[chave]) {
-      ncIgnoradas.push({ item: nome, idNcExistente: abertas[chave] });
-      return;
-    }
-    const idNc = nextId_('NC');
-    appendRow_(SHEETS.NAO_CONFORMIDADES, {
-      ID_NC: idNc,
       UNIDADE: unidade,
       ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
       NOME_EQUIPAMENTO: equipamento.NOME,
-      ITEM: nome,
-      DESCRICAO: descricao,
-      FOTO: fotoProblema,
-      STATUS: 'aberta',
-      ABERTA_EM: agora,
-      FECHADA_EM: '',
-      ID_CHECKLIST_ORIGEM: idChecklist
+      RESPONSAVEL: responsavel,
+      DATA_HORA: agora,
+      STATUS: temPendencia ? 'pendencia' : 'ok',
+      FOTO_EQUIPAMENTO: fotoEquipamento,
+      HORIMETRO_INICIAL: horimetroInicial,
+      HORIMETRO_FINAL: '',
+      FECHADO_EM: ''
     });
-    abertas[chave] = idNc;
-    ncCriadas.push({ item: nome, idNc: idNc });
-  });
 
-  appendRows_(SHEETS.CHECKLIST_ITENS, linhasItens);
+    // Mapa das NCs já abertas: chave equipamento + item (a regra de
+    // deduplicação pedida — só nasce outra depois que a anterior fechar).
+    const abertas = {};
+    readSheet_(SHEETS.NAO_CONFORMIDADES).forEach(function (nc) {
+      if (String(nc.STATUS) === 'aberta') {
+        abertas[String(nc.ID_EQUIPAMENTO) + '||' + textoLimpo_(nc.ITEM).toLowerCase()] = nc.ID_NC;
+      }
+    });
 
-  return {
-    ok: true,
-    data: {
+    const linhasItens = [];
+    const linhasNc = [];
+    const ncCriadas = [];
+    const ncIgnoradas = [];
+    let proximoIdxNc = 0;
+
+    itens.forEach(function (item, indice) {
+      const nome = textoLimpo_(item.item);
+      const resposta = textoLimpo_(item.resposta).toLowerCase();
+      const instrucao = textoLimpo_(item.instrucao) || instrucaoPadraoDoItem_(nome);
+      // NOK repetido sem descrição/foto: aproveita o que já está na NC aberta.
+      const ncAberta = resposta === 'nok' ? ncsJaAbertas[nome.toLowerCase()] : null;
+      const descricao = resposta === 'nok'
+        ? (textoLimpo_(item.descricaoProblema) || (ncAberta ? 'Problema já registrado na ' + ncAberta.ID_NC + ': ' + textoLimpo_(ncAberta.DESCRICAO) : ''))
+        : '';
+      const fotoProblema = fotosItens[indice] || (ncAberta ? String(ncAberta.FOTO || '') : '');
+
+      linhasItens.push({
+        ID_ITEM_RESPOSTA: idsItens[indice],
+        ID_CHECKLIST: idChecklist,
+        ITEM: nome,
+        INSTRUCAO: instrucao,
+        RESPOSTA: resposta,
+        DESCRICAO_PROBLEMA: descricao,
+        FOTO_PROBLEMA: fotoProblema
+      });
+
+      if (resposta !== 'nok') return;
+
+      const chave = String(equipamento.ID_EQUIPAMENTO) + '||' + nome.toLowerCase();
+      if (abertas[chave]) {
+        ncIgnoradas.push({ item: nome, idNcExistente: abertas[chave] });
+        return;
+      }
+      const idNc = idsNc[proximoIdxNc++];
+      linhasNc.push({
+        ID_NC: idNc,
+        UNIDADE: unidade,
+        ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
+        NOME_EQUIPAMENTO: equipamento.NOME,
+        ITEM: nome,
+        DESCRICAO: descricao,
+        FOTO: fotoProblema,
+        STATUS: 'aberta',
+        ABERTA_EM: agora,
+        FECHADA_EM: '',
+        ID_CHECKLIST_ORIGEM: idChecklist
+      });
+      abertas[chave] = idNc;
+      ncCriadas.push({ item: nome, idNc: idNc });
+    });
+
+    appendRows_(SHEETS.CHECKLIST_ITENS, linhasItens);
+    appendRows_(SHEETS.NAO_CONFORMIDADES, linhasNc);
+
+    return {
       idChecklist: idChecklist,
       status: temPendencia ? 'pendencia' : 'ok',
       dataHora: agora,
       naoConformidadesCriadas: ncCriadas,
       naoConformidadesIgnoradas: ncIgnoradas
-    }
+    };
+  });
+
+  invalidarCachePainel_(unidade);
+  return { ok: true, data: resultado };
+}
+// [OUT/2026] Exclusão de checklist feito por engano — só Administrador
+// (a ação está em ACOES_ADMIN). Apaga o checklist, as respostas dele e as
+// não conformidades que ele abriu. As fotos continuam na pasta do Drive.
+function removerLinhasPorValor_(sheetName, coluna, valor) {
+  const sh = sheet_(sheetName);
+  const valores = sh.getDataRange().getValues();
+  const idx = valores[0].indexOf(coluna);
+  if (idx === -1) return 0;
+  let removidas = 0;
+  // De baixo para cima, para a exclusão de uma linha não deslocar as outras.
+  for (let i = valores.length - 1; i >= 1; i--) {
+    if (String(valores[i][idx]) === String(valor)) { sh.deleteRow(i + 1); removidas++; }
+  }
+  return removidas;
+}
+
+function deletarChecklist_(p) {
+  const id = textoLimpo_(p.idChecklist);
+  if (!id) throw new Error('Informe o checklist a excluir.');
+  const atual = findRowById_(SHEETS.CHECKLISTS, 'ID_CHECKLIST', id);
+  if (!atual) throw new Error('Checklist não encontrado.');
+  validarAcessoUnidade_(p.idUsuario, atual.UNIDADE);
+
+  const itens = removerLinhasPorValor_(SHEETS.CHECKLIST_ITENS, 'ID_CHECKLIST', id);
+  const ncs = removerLinhasPorValor_(SHEETS.NAO_CONFORMIDADES, 'ID_CHECKLIST_ORIGEM', id);
+  removeRowById_(SHEETS.CHECKLISTS, 'ID_CHECKLIST', id);
+  invalidarCachePainel_(atual.UNIDADE);
+  return {
+    ok: true,
+    data: { ID_CHECKLIST: id, removido: true, itensRemovidos: itens, naoConformidadesRemovidas: ncs }
   };
 }
+
 
 function instrucaoPadraoDoItem_(nomeItem) {
   const achado = CHECKLIST_ITENS_PADRAO.find(function (i) {
     return i.item.toLowerCase() === String(nomeItem).toLowerCase();
   });
   return achado ? achado.instrucao : '';
+}
+
+function instrucaoPadraoLavagem_(nomeItem) {
+  const achado = LAVAGEM_ITENS_PADRAO.find(function (i) {
+    return i.item.toLowerCase() === String(nomeItem).toLowerCase();
+  });
+  return achado ? achado.instrucao : '';
+}
+
+// ======================= LAVAGEM =======================
+// Registro de lavagem de equipamento: o operador escolhe a máquina e
+// responde as perguntas fixas de LAVAGEM_ITENS_PADRAO (OK/NOK/N-A), com
+// foto do equipamento obrigatória — mesmo padrão visual do checklist de
+// manutenção, mas sem gerar não conformidade automática (é um registro de
+// limpeza, não de segurança do equipamento).
+
+function getLavagens_(params) {
+  const janela = resolverPeriodo_(Object.assign({ periodo: params.periodo || 'todos' }, params));
+  let rows = filtrarPorUnidade_(readSheet_(SHEETS.LAVAGENS), params.unidade);
+
+  const idEquipamento = textoLimpo_(params.idEquipamento);
+  if (idEquipamento) rows = rows.filter(function (l) { return String(l.ID_EQUIPAMENTO) === idEquipamento; });
+
+  const status = textoLimpo_(params.status);
+  if (status) rows = rows.filter(function (l) { return String(l.STATUS) === status; });
+
+  rows = rows.filter(function (l) { return dentroDoPeriodo_(l.DATA_HORA, janela); });
+
+  const itensPorLavagem = {};
+  readSheet_(SHEETS.LAVAGEM_ITENS).forEach(function (it) {
+    const chave = String(it.ID_LAVAGEM);
+    if (!itensPorLavagem[chave]) itensPorLavagem[chave] = [];
+    itensPorLavagem[chave].push(it);
+  });
+  rows.forEach(function (l) { l.ITENS = itensPorLavagem[String(l.ID_LAVAGEM)] || []; });
+
+  return rows.sort(function (a, b) { return ordenarPorDataDesc_(a.DATA_HORA, b.DATA_HORA); });
+}
+
+// [PERF 14/09] Mesma reestruturação de criarChecklist_: foto salva no
+// Drive com nome provisório ANTES da trava; a trava só protege ID + gravação.
+function criarLavagem_(p) {
+  const unidade = exigirUnidade_(p.unidade);
+  validarAcessoUnidade_(p.idUsuario, unidade);
+
+  const equipamento = equipamentoDaUnidade_(p.idEquipamento, unidade);
+  const responsavel = textoLimpo_(p.responsavel);
+  if (!responsavel) throw new Error('Selecione o responsável pela lavagem.');
+
+  const itens = Array.isArray(p.itens) ? p.itens : [];
+  if (!itens.length) throw new Error('Nenhum item respondido na lavagem.');
+
+  itens.forEach(function (item) {
+    const nome = textoLimpo_(item.item);
+    if (!nome) throw new Error('Um dos itens da lavagem está sem nome.');
+    const resposta = textoLimpo_(item.resposta).toLowerCase();
+    if (RESPOSTAS_CHECKLIST.indexOf(resposta) === -1) {
+      throw new Error('Responda "' + nome + '" com OK, NOK ou N/A.');
+    }
+  });
+
+  if (!p.fotoEquipamento) throw new Error('A foto do equipamento é obrigatória para concluir a lavagem.');
+
+  const agora = nowIso_();
+  const temPendencia = itens.some(function (i) { return textoLimpo_(i.resposta).toLowerCase() === 'nok'; });
+
+  const baseTemp = String(equipamento.ID_EQUIPAMENTO) + '_' + new Date().getTime();
+  const fotoEquipamento = salvarFoto_(p.fotoEquipamento, baseTemp + '_equipamento');
+  if (!fotoEquipamento) throw new Error('Não foi possível salvar a foto do equipamento. Tente novamente.');
+
+  const resultado = comTravaEscrita_(function () {
+    const idLavagem = nextId_('LAV');
+    appendRow_(SHEETS.LAVAGENS, {
+      ID_LAVAGEM: idLavagem,
+      UNIDADE: unidade,
+      ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
+      NOME_EQUIPAMENTO: equipamento.NOME,
+      RESPONSAVEL: responsavel,
+      DATA_HORA: agora,
+      STATUS: temPendencia ? 'pendencia' : 'ok',
+      FOTO_EQUIPAMENTO: fotoEquipamento
+    });
+
+    const idsItens = nextIds_('LVI', itens.length);
+    const linhasItens = itens.map(function (item, indice) {
+      const nome = textoLimpo_(item.item);
+      const resposta = textoLimpo_(item.resposta).toLowerCase();
+      return {
+        ID_ITEM_RESPOSTA: idsItens[indice],
+        ID_LAVAGEM: idLavagem,
+        ITEM: nome,
+        INSTRUCAO: textoLimpo_(item.instrucao) || instrucaoPadraoLavagem_(nome),
+        RESPOSTA: resposta,
+        OBSERVACAO: resposta === 'nok' ? textoLimpo_(item.observacao) : ''
+      };
+    });
+    appendRows_(SHEETS.LAVAGEM_ITENS, linhasItens);
+
+    return { idLavagem: idLavagem, status: temPendencia ? 'pendencia' : 'ok', dataHora: agora };
+  });
+
+  invalidarCachePainel_(unidade);
+  return { ok: true, data: resultado };
 }
 
 // ======================= NÃO CONFORMIDADES =======================
@@ -1088,7 +1955,56 @@ function getNaoConformidades_(params) {
     nc.TEMPO_ABERTA_TEXTO = abertura ? formatarDuracao_(ms) : '-';
   });
 
+  // [OUT/2026] A NC acompanha o chamado de manutenção aberto para ela.
+  const manutPorNc = manutencaoPorNc_();
+  rows.forEach(function (nc) {
+    const m = manutPorNc[String(nc.ID_NC)];
+    nc.ID_MANUTENCAO = m ? m.ID_MANUTENCAO : '';
+    nc.STATUS_MANUTENCAO = m ? String(m.STATUS) : '';
+  });
+
   return rows.sort(function (a, b) { return ordenarPorDataDesc_(a.ABERTA_EM, b.ABERTA_EM); });
+}
+
+// [OUT/2026] Ligação NC ↔ manutenção. Ao abrir manutenção a partir de uma
+// não conformidade, o app grava "(origem: não conformidade NC-000001)" na
+// descrição do chamado; é por esse código que os dois são ligados.
+function idsNcDoTexto_(texto) {
+  return String(texto || '').match(/NC-\d+/g) || [];
+}
+
+// Para cada NC, o chamado de manutenção mais recente aberto para ela.
+function manutencaoPorNc_() {
+  const mapa = {};
+  readSheet_(SHEETS.MANUTENCOES).forEach(function (m) {
+    idsNcDoTexto_(m.DESCRICAO).forEach(function (idNc) {
+      const atual = mapa[idNc];
+      if (!atual || ordenarPorDataDesc_(m.ABERTA_EM, atual.ABERTA_EM) < 0) mapa[idNc] = m;
+    });
+  });
+  return mapa;
+}
+
+// Quando o chamado é finalizado, fecha as NCs que deram origem a ele.
+// Nunca derruba a atualização da manutenção: qualquer erro aqui é ignorado.
+function fecharNcsDaManutencao_(idManutencao) {
+  try {
+    const m = findRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', textoLimpo_(idManutencao));
+    if (!m || String(m.STATUS) !== 'concluida') return;
+    const ids = idsNcDoTexto_(m.DESCRICAO);
+    if (!ids.length) return;
+    comTravaEscrita_(function () {
+      ids.forEach(function (idNc) {
+        const nc = findRowById_(SHEETS.NAO_CONFORMIDADES, 'ID_NC', idNc);
+        if (nc && String(nc.STATUS) === 'aberta') {
+          updateRowById_(SHEETS.NAO_CONFORMIDADES, 'ID_NC', idNc, {
+            STATUS: 'fechada', FECHADA_EM: m.CONCLUIDA_EM || nowIso_()
+          });
+        }
+      });
+    });
+    invalidarCachePainel_(m.UNIDADE);
+  } catch (e) { /* segue: a manutenção já foi atualizada */ }
 }
 
 // status: 'fechada' fecha (carimba FECHADA_EM); 'aberta' reabre (limpa).
@@ -1144,25 +2060,121 @@ function getManutencoes_(params) {
   const idEquipamento = textoLimpo_(params.idEquipamento);
   if (idEquipamento) rows = rows.filter(function (m) { return String(m.ID_EQUIPAMENTO) === idEquipamento; });
 
-  rows = rows.filter(function (m) { return dentroDoPeriodo_(m.ABERTA_EM, janela); });
+  // [ESTABILIDADE OUT/2026] Chamado que ainda não foi finalizado aparece
+  // sempre, mesmo aberto antes do período — a lista do app agora vem só
+  // com os últimos 30 dias por padrão, e chamado antigo em aberto não pode sumir.
+  rows = rows.filter(function (m) {
+    return String(m.STATUS) !== 'concluida' || dentroDoPeriodo_(m.ABERTA_EM, janela);
+  });
 
   rows.forEach(function (m) {
     const ms = tempoEmManutencaoMs_(m, null);
     m.TEMPO_MANUTENCAO_MS = ms;
-    m.TEMPO_MANUTENCAO_TEXTO = formatarDuracao_(ms);
+    m.TEMPO_MANUTENCAO_TEXTO = formatarHoras_(ms);
+    anexarTemposManutencao_(m);
   });
 
   return rows.sort(function (a, b) { return ordenarPorDataDesc_(a.ABERTA_EM, b.ABERTA_EM); });
 }
 
+// ======================= [FLUXO OUT/2026] EXPEDIENTE =======================
+// Todo tempo de manutenção e toda hora de máquina (sem manutenção, em
+// manutenção, parada) é contado SÓ dentro do expediente do SETOR do
+// equipamento, de segunda a sexta:
+//   OPERAÇÃO (1 turno): 07:30 às 17:30 direto, contando o horário de
+//     almoço → 10h por dia.
+//   FÁBRICA (3 turnos): direto, das 05:00 de segunda às 06:00 de sábado
+//     (05:00–14:00, 14:00–23:00, 23:00–06:00), sem desconto de almoço.
+// Fora disso (madrugada da Operação, fim de semana) não conta. Feriado
+// conta como dia normal. Para mudar um horário, basta editar aqui.
+// [OUT/2026 — 15/10] A pedido: o tempo agora corre 24h por dia, todos os
+// dias — sábado, domingo e feriado contam. Os horários de turno antigos
+// ficam em EXPEDIENTE_TURNOS_ANTIGO, caso precisem voltar.
+const TEMPO_CORRIDO_24H_ = {
+  diasDeInicio: [0, 1, 2, 3, 4, 5, 6],      // todos os dias
+  inicioMin: 0,                             // 00:00
+  fimMin: 24 * 60,                          // 24:00
+  pausas: [],
+  descricao: '24 horas por dia, todos os dias (inclui sábado, domingo e feriado)'
+};
+const EXPEDIENTE_POR_SETOR = {
+  OPERACAO: TEMPO_CORRIDO_24H_,
+  FABRICA: TEMPO_CORRIDO_24H_
+};
+const EXPEDIENTE_TURNOS_ANTIGO = {
+  OPERACAO: {
+    diasDeInicio: [1, 2, 3, 4, 5],            // 1 = segunda … 5 = sexta
+    inicioMin: 7 * 60 + 30,                   // 07:30
+    fimMin: 17 * 60 + 30,                     // 17:30
+    pausas: [],
+    descricao: 'seg a sex, 07:30 às 17:30, contando o horário de almoço'
+  },
+  FABRICA: {
+    diasDeInicio: [1, 2, 3, 4, 5],
+    inicioMin: 5 * 60,                        // 05:00
+    fimMin: 30 * 60,                          // 06:00 do dia seguinte
+    pausas: [],
+    descricao: 'de seg 05:00 até sáb 06:00, direto (3 turnos)'
+  }
+};
+function expedienteDoSetor_(setor) { return EXPEDIENTE_POR_SETOR[setorOuPadrao_(setor)]; }
+function descricaoExpediente_(setor) {
+  if (normalizarSetor_(setor) || EXPEDIENTE_POR_SETOR.OPERACAO === EXPEDIENTE_POR_SETOR.FABRICA) return expedienteDoSetor_(setor).descricao;
+  return 'Operação: ' + EXPEDIENTE_POR_SETOR.OPERACAO.descricao + '; Fábrica: ' + EXPEDIENTE_POR_SETOR.FABRICA.descricao;
+}
+var OFFSET_FUSO_MS_ = null;
+
+// Diferença entre o horário local da planilha e o UTC, em ms (ex.: -3h).
+function offsetFusoMs_() {
+  if (OFFSET_FUSO_MS_ === null) {
+    const z = Utilities.formatDate(new Date(), fusoHorario_(), 'Z'); // ex.: -0300
+    const sinal = z.charAt(0) === '-' ? -1 : 1;
+    OFFSET_FUSO_MS_ = sinal * (Number(z.substr(1, 2)) * 60 + Number(z.substr(3, 2))) * 60000;
+  }
+  return OFFSET_FUSO_MS_;
+}
+
+// Quantos milissegundos do intervalo [inicio, fim] caem dentro do
+// expediente do setor (OPERACAO se não informado).
+function msExpediente_(inicio, fim, setor) {
+  if (!inicio || !fim) return 0;
+  const ex = expedienteDoSetor_(setor);
+  const off = offsetFusoMs_();
+  const a = inicio.getTime() + off, b = fim.getTime() + off; // "relógio de parede" local
+  if (b <= a) return 0;
+  const DIA = 86400000, MIN = 60000;
+  const ehDiaUtil = function (dia) { return ex.diasDeInicio.indexOf(new Date(dia * DIA).getUTCDay()) > -1; };
+  const corte = function (de, ate) { return Math.max(0, Math.min(b, ate) - Math.max(a, de)); };
+  let total = 0;
+  for (let dia = Math.floor(a / DIA) - 2; dia <= Math.floor(b / DIA); dia++) {
+    if (!ehDiaUtil(dia)) continue;
+    const ji = dia * DIA + ex.inicioMin * MIN;
+    let jf = dia * DIA + ex.fimMin * MIN;
+    // Jornada que invade a do dia seguinte (Fábrica): não conta a mesma hora duas vezes.
+    if (ehDiaUtil(dia + 1)) jf = Math.min(jf, (dia + 1) * DIA + ex.inicioMin * MIN);
+    total += corte(ji, jf);
+    ex.pausas.forEach(function (p) { total -= corte(Math.max(ji, dia * DIA + p[0] * MIN), Math.min(jf, dia * DIA + p[1] * MIN)); });
+  }
+  return Math.max(0, total);
+}
+
+// "27h 15min" — horas corridas de expediente (um "dia" de expediente tem
+// 19h, então mostrar em dias confundiria).
+function formatarHoras_(ms) {
+  const minutos = Math.floor(((!ms || ms < 0) ? 0 : ms) / 60000);
+  const h = Math.floor(minutos / 60), m = minutos % 60;
+  if (h > 0) return h + 'h ' + (m < 10 ? '0' : '') + m + 'min';
+  return m + 'min';
+}
+
 /**
- * Tempo em manutenção = CONCLUIDA_EM − (INICIADA_EM ou ABERTA_EM); se ainda
+ * Tempo em manutenção = da abertura (ou início) até a conclusão; se ainda
  * não foi concluída, conta até agora. Quando `janela` é informada, o
- * intervalo é recortado dentro do período pedido — assim o ranking do
- * relatório mostra o tempo daquele período, não o tempo total histórico.
+ * intervalo é recortado dentro do período pedido. Sempre em horas de
+ * expediente (ver EXPEDIENTE).
  */
 function tempoEmManutencaoMs_(manutencao, janela) {
-  const inicio = parseData_(manutencao.INICIADA_EM) || parseData_(manutencao.ABERTA_EM);
+  const inicio = parseData_(manutencao.ABERTA_EM) || parseData_(manutencao.INICIADA_EM);
   if (!inicio) return 0;
   const fim = parseData_(manutencao.CONCLUIDA_EM) || new Date();
 
@@ -1170,9 +2182,198 @@ function tempoEmManutencaoMs_(manutencao, janela) {
   let ate = fim.getTime();
   if (janela && janela.inicio) de = Math.max(de, janela.inicio.getTime());
   if (janela && janela.fim) ate = Math.min(ate, janela.fim.getTime());
-  return Math.max(0, ate - de);
+  if (ate <= de) return 0;
+  return msExpediente_(new Date(de), new Date(ate), setorDoEquipamento_(manutencao.ID_EQUIPAMENTO));
 }
 
+/**
+ * [FLUXO OUT/2026] Quebra o chamado em cada etapa, sempre em horas de
+ * expediente:
+ *   ACIONAMENTO = abertura → técnico acionado
+ *   CHEGADA     = técnico acionado → início da manutenção
+ *   EXECUCAO    = início → fim (ou até agora, se em andamento)
+ *   TOTAL       = abertura → fim (ou até agora)
+ *   ESPERA      = abertura → início (mantido por compatibilidade)
+ * Etapa que ainda não aconteceu fica null / '—'. Etapa em curso conta até
+ * agora e vem marcada em ETAPA_EM_CURSO.
+ */
+function anexarTemposManutencao_(m) {
+  // Conta pelo relógio em minutos cheios, igual ao que a tela mostra: aberto
+  // às 11:04 e acionado às 11:05 dá 1min, mesmo que a abertura tenha sido
+  // gravada com segundos (11:04:40) e o acionamento digitado sem eles.
+  const noMinuto = function (dt) { return dt ? new Date(Math.floor(dt.getTime() / 60000) * 60000) : null; };
+  const aberta = noMinuto(parseData_(m.ABERTA_EM));
+  const acionado = noMinuto(parseData_(m.ACIONADO_EM));
+  const iniciada = noMinuto(parseData_(m.INICIADA_EM));
+  const concluida = noMinuto(parseData_(m.CONCLUIDA_EM));
+  const agora = noMinuto(new Date());
+  const status = String(m.STATUS);
+  const setor = setorDoEquipamento_(m.ID_EQUIPAMENTO);
+  const dur = function (de, ate) { return (de && ate) ? msExpediente_(de, ate, setor) : null; };
+
+  const acionamentoMs = aberta ? dur(aberta, acionado || (status === 'aberta' ? agora : null)) : null;
+  const chegadaMs = acionado ? dur(acionado, iniciada || (status === 'acionado' ? agora : null)) : null;
+  const execucaoMs = iniciada ? dur(iniciada, concluida || agora) : null;
+  const totalMs = aberta ? dur(aberta, concluida || agora) : null;
+  const esperaMs = (aberta && iniciada) ? dur(aberta, iniciada) : null;
+  const txt = function (ms) { return ms === null ? '—' : formatarHoras_(ms); };
+
+  m.TEMPO_ACIONAMENTO_MS = acionamentoMs; m.TEMPO_ACIONAMENTO_TEXTO = txt(acionamentoMs);
+  m.TEMPO_CHEGADA_MS = chegadaMs;         m.TEMPO_CHEGADA_TEXTO = txt(chegadaMs);
+  m.TEMPO_EXECUCAO_MS = execucaoMs;       m.TEMPO_EXECUCAO_TEXTO = txt(execucaoMs);
+  m.TEMPO_TOTAL_MS = totalMs;             m.TEMPO_TOTAL_TEXTO = txt(totalMs);
+  m.TEMPO_ESPERA_MS = esperaMs;           m.TEMPO_ESPERA_TEXTO = txt(esperaMs);
+  m.ETAPA_EM_CURSO = status === 'concluida' ? '' : status;
+  return m;
+}
+
+// Cria a coluna ACIONADO_EM (última) na aba MANUTENCOES se ainda não
+// existir. Roda sozinha no primeiro pedido depois da atualização; também
+// pode ser rodada à mão: ▶ Executar > configurarFluxoManutencao.
+function configurarFluxoManutencao() {
+  const sh = sheet_(SHEETS.MANUTENCOES);
+  const col = HEADERS[SHEETS.MANUTENCOES].indexOf('ACIONADO_EM') + 1;
+  const cabecalho = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), col)).getValues()[0];
+  const atual = String(cabecalho[col - 1] || '').trim();
+  if (atual !== 'ACIONADO_EM') {
+    if (atual) {
+      throw new Error('A aba MANUTENCOES já tem a coluna "' + atual + '" na posição ' + col +
+        ', onde deveria entrar ACIONADO_EM. Mova essa coluna para depois e rode configurarFluxoManutencao() de novo.');
+    }
+    sh.getRange(1, col).setValue('ACIONADO_EM').setFontWeight('bold');
+  }
+  PropertiesService.getScriptProperties().setProperty('fluxo_v1_ok', 'SIM');
+  SpreadsheetApp.flush();
+  return 'Coluna ACIONADO_EM pronta na aba MANUTENCOES.';
+}
+
+function garantirColunaAcionado_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache.get('fluxo_v1_ok')) return;
+    if (PropertiesService.getScriptProperties().getProperty('fluxo_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('fluxo_v1_ok') !== 'SIM') configurarFluxoManutencao();
+      } finally { lock.releaseLock(); }
+    }
+    cache.put('fluxo_v1_ok', '1', 21600);
+  } catch (e) { /* rode configurarFluxoManutencao() à mão se a coluna não aparecer */ }
+}
+
+const STATUS_MANUTENCAO_VALIDOS = ['aberta', 'acionado', 'andamento', 'concluida'];
+const STATUS_MANUTENCAO_ROTULO = {
+  aberta: 'Manutenção aberta', acionado: 'Técnico acionado',
+  andamento: 'Manutenção em andamento', concluida: 'Manutenção finalizada'
+};
+function manutencaoAtiva_(m) { return String(m.STATUS) !== 'concluida'; }
+
+// ======================= E-MAIL DE NOVA MANUTENÇÃO =======================
+// Lista de quem recebe o e-mail automático quando uma manutenção é aberta,
+// cadastrada só pela planilha (aba CONFIG_EMAILS_MANUTENCAO) — cada
+// unidade tem sua própria lista, e uma unidade sem linha nenhuma ali
+// simplesmente não dispara e-mail.
+
+// [SETOR OUT/2026] A lista agora é por unidade E setor (coluna SETOR da
+// aba: FABRICA ou OPERACAO; em branco conta como OPERACAO). A manutenção
+// de um equipamento da Fábrica só avisa a lista da Fábrica, e vice-versa.
+function getEmailsNotificacao_(unidade, setor) {
+  const alvo = textoLimpo_(unidade);
+  const setorAlvo = setorOuPadrao_(setor);
+  return readSheet_(SHEETS.EMAILS_MANUTENCAO)
+    .filter(function (e) {
+      return String(e.ATIVO).toUpperCase() === 'SIM' && String(e.UNIDADE).trim() === alvo &&
+        (setorEhTodos_(e.SETOR) || setorOuPadrao_(e.SETOR) === setorAlvo);
+    })
+    .map(function (e) { return textoLimpo_(e.EMAIL); })
+    .filter(function (email) { return email; });
+}
+
+// [FLUXO OUT/2026] Manda um único e-mail (todos os destinatários da
+// unidade + setor no "Para:") a CADA mudança de status do chamado:
+// abertura, técnico acionado, início e fim. Cada e-mail traz a linha do
+// tempo completa até ali e os tempos de cada etapa em horas de expediente.
+// É bônus, não obrigação: lista vazia ou falha no envio nunca travam o
+// registro (ver autorizarPermissoesEmail).
+function resumoManutencaoTexto_(m) {
+  anexarTemposManutencao_(m);
+  const st = String(m.STATUS);
+  const dh = function (v) { return v ? formatarDataHoraBr_(v) : '—'; };
+  const emCurso = function (etapa) { return m.ETAPA_EM_CURSO === etapa ? ' (até agora)' : ''; };
+  return 'Frota: ' + m.NOME_EQUIPAMENTO + '\n' +
+    'Chamado: ' + m.ID_MANUTENCAO + ' — ' + m.TITULO + '\n' +
+    'Situação: ' + (STATUS_MANUTENCAO_ROTULO[st] || st) + '\n\n' +
+    'LINHA DO TEMPO\n' +
+    '1. Chamado aberto ........ ' + dh(m.ABERTA_EM) + '\n' +
+    '2. Técnico acionado ...... ' + dh(m.ACIONADO_EM) + '\n' +
+    '3. Início da manutenção .. ' + dh(m.INICIADA_EM) + '\n' +
+    '4. Fim da manutenção ..... ' + dh(m.CONCLUIDA_EM) + '\n\n' +
+    'TEMPOS (tempo corrido: ' + descricaoExpediente_(setorDoEquipamento_(m.ID_EQUIPAMENTO)) + ')\n' +
+    'Abertura → técnico acionado: ' + m.TEMPO_ACIONAMENTO_TEXTO + emCurso('aberta') + '\n' +
+    'Técnico acionado → início: ' + m.TEMPO_CHEGADA_TEXTO + emCurso('acionado') + '\n' +
+    'Início → fim da manutenção: ' + m.TEMPO_EXECUCAO_TEXTO + emCurso('andamento') + '\n' +
+    'TOTAL (abertura → fim): ' + m.TEMPO_TOTAL_TEXTO + (st === 'concluida' ? '' : ' (até agora)') + '\n';
+}
+
+function notificarManutencao_(m) {
+  try {
+    const setor = setorDoEquipamento_(m.ID_EQUIPAMENTO);
+    const emails = getEmailsNotificacao_(m.UNIDADE, setor);
+    if (!emails.length) return;
+    const st = String(m.STATUS);
+    const assunto = '[Central de Frota] ' + (STATUS_MANUTENCAO_ROTULO[st] || st) + ' — ' + m.NOME_EQUIPAMENTO +
+      ' (' + m.UNIDADE + ' · ' + rotuloSetor_(setor) + ')';
+    const corpo =
+      resumoManutencaoTexto_(Object.assign({}, m)) + '\n' +
+      (m.CATEGORIA ? 'Problema: ' + m.CATEGORIA + (m.SUBCATEGORIA ? ' · ' + m.SUBCATEGORIA : '') + '\n' : '') +
+      (m.ABERTO_POR ? 'Aberto por: ' + m.ABERTO_POR + '\n' : '') +
+      (m.PRESTADOR ? 'Prestador de serviço: ' + m.PRESTADOR + '\n' : '') +
+      (m.CAUSA_RAIZ ? 'Causa raiz: ' + m.CAUSA_RAIZ + '\n' : '') +
+      (m.SOLUCAO ? 'O que foi feito: ' + m.SOLUCAO + '\n' : '') +
+      'Unidade: ' + m.UNIDADE + '\n' +
+      'Setor: ' + rotuloSetor_(setor) + '\n' +
+      'Tipo: ' + (m.TIPO === 'preventiva' ? 'Preventiva' : 'Corretiva') + '\n' +
+      'Prioridade: ' + m.PRIORIDADE + '\n' +
+      (m.DESCRICAO ? 'Descrição: ' + m.DESCRICAO + '\n' : '') +
+      '\nAcesse o app Central de Frota para acompanhar.';
+    // [PERF 15/10] O e-mail vai para uma fila e sai pelo ciclo de 1 minuto
+    // (intCiclo, no Integracoes.gs): quem salvou não espera o Gmail.
+    enfileirarEmail_({ to: emails.join(','), subject: assunto, body: corpo });
+  } catch (e) { /* notificação é bônus: nunca deve travar o registro */ }
+}
+function notificarNovaManutencao_(m) { notificarManutencao_(m); }
+
+// Cada e-mail é uma propriedade própria (MAIL_<hora>_<aleatório>): dois
+// pedidos ao mesmo tempo nunca se atropelam.
+function enfileirarEmail_(msg) {
+  try {
+    PropertiesService.getScriptProperties()
+      .setProperty('MAIL_' + Date.now() + '_' + Math.floor(Math.random() * 1e6), JSON.stringify(msg));
+  } catch (e) {
+    try { MailApp.sendEmail(msg); } catch (e2) { /* segue */ }
+  }
+}
+
+// Envia o que estiver na fila. Roda no intCiclo (a cada minuto); também
+// pode ser rodada à mão no editor.
+function enviarFilaEmails() {
+  const props = PropertiesService.getScriptProperties();
+  const todas = props.getProperties();
+  const chaves = Object.keys(todas).filter(function (k) { return k.indexOf('MAIL_') === 0; }).sort();
+  let enviados = 0;
+  chaves.forEach(function (k) {
+    props.deleteProperty(k); // tira antes: nunca manda o mesmo e-mail duas vezes
+    try { MailApp.sendEmail(JSON.parse(todas[k])); enviados++; } catch (e) { console.error('Fila de e-mail: ' + e); }
+  });
+  return enviados + ' e-mail(s) enviado(s).';
+}
+
+// [PERF 14/09] Validações fora da trava; a trava (comTravaEscrita_) cobre
+// só ID + gravação + a sincronização de status do equipamento (que também
+// escreve na planilha). O e-mail de aviso (notificarNovaManutencao_) —
+// que pode demorar 1-2s ou mais e não precisa de exclusividade nenhuma —
+// passou para DEPOIS de soltar a trava, então não segura mais ninguém.
 function criarManutencao_(p) {
   const unidade = exigirUnidade_(p.unidade);
   validarAcessoUnidade_(p.idUsuario, unidade);
@@ -1188,10 +2389,15 @@ function criarManutencao_(p) {
   }
   const titulo = textoLimpo_(p.titulo);
   if (!titulo) throw new Error('Informe o título da manutenção.');
+  // [OUT/2026 — 15/10] Categoria e subcategoria do problema + quem abriu.
+  const categoria = textoLimpo_(p.categoria);
+  const subcategoria = textoLimpo_(p.subcategoria);
+  const usuarioAbriu = p.idUsuario ? getUsuariosCache_().find(function (u) { return String(u.ID_USUARIO) === String(p.idUsuario); }) : null;
+  const abertoPor = textoLimpo_(p.abertoPor) || (usuarioAbriu ? textoLimpo_(usuarioAbriu.NOME) : '');
 
   const status = textoLimpo_(p.status).toLowerCase() || 'aberta';
-  if (['aberta', 'andamento', 'concluida'].indexOf(status) === -1) {
-    throw new Error('Status inválido: ' + status + '. Use aberta, andamento ou concluida.');
+  if (STATUS_MANUTENCAO_VALIDOS.indexOf(status) === -1) {
+    throw new Error('Status inválido: ' + status + '. Use aberta, acionado, andamento ou concluida.');
   }
 
   const dataPrevista = tipo === 'preventiva' ? normalizarDataIso_(p.dataPrevista) : '';
@@ -1199,25 +2405,180 @@ function criarManutencao_(p) {
     throw new Error('Informe a data prevista da manutenção preventiva.');
   }
 
+  const horimetroManut = horimetroOpcional_(p.horimetro, 'Horímetro');
+  // [OUT/2026] Corretiva precisa de pelo menos uma foto do problema (até 3).
+  // As fotos sobem para o Drive aqui, fora da trava.
+  const fotosRecebidas = (Array.isArray(p.fotos) ? p.fotos : (p.fotos ? [p.fotos] : []))
+    .filter(function (f) { return !!f; }).slice(0, 3);
+  if (tipo === 'corretiva' && !fotosRecebidas.length) {
+    throw new Error('Tire pelo menos uma foto do problema para abrir a manutenção.');
+  }
+  const fotosManut = fotosRecebidas.length
+    ? salvarFotos_(fotosRecebidas, 'MAN_' + equipamento.ID_EQUIPAMENTO + '_' + new Date().getTime()) : '';
+  if (fotosRecebidas.length && !fotosManut) throw new Error('Não foi possível salvar a foto. Tente novamente.');
   const agora = nowIso_();
-  const idManutencao = nextId_('MAN');
-  const registro = {
-    ID_MANUTENCAO: idManutencao,
-    UNIDADE: unidade,
+  const registro = comTravaEscrita_(function () {
+    const idManutencao = nextId_('MAN');
+    const r = {
+      ID_MANUTENCAO: idManutencao,
+      UNIDADE: unidade,
+      ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
+      NOME_EQUIPAMENTO: equipamento.NOME,
+      TIPO: tipo,
+      PRIORIDADE: prioridade,
+      TITULO: titulo,
+      DESCRICAO: textoLimpo_(p.descricao),
+      STATUS: status,
+      DATA_PREVISTA: dataPrevista,
+      ABERTA_EM: agora,
+      INICIADA_EM: status === 'andamento' || status === 'concluida' ? (normalizarDataIso_(p.iniciadaEm) || agora) : '',
+      CONCLUIDA_EM: status === 'concluida' ? (normalizarDataIso_(p.concluidaEm) || agora) : '',
+      ACIONADO_EM: status === 'acionado' ? (normalizarDataIso_(p.acionadoEm) || agora) : '',
+      HORIMETRO: horimetroManut,
+      FOTOS: fotosManut,
+      PRESTADOR: textoLimpo_(p.prestador),
+      CATEGORIA: categoria,
+      SUBCATEGORIA: subcategoria,
+      ABERTO_POR: abertoPor
+    };
+    appendRow_(SHEETS.MANUTENCOES, r);
+    sincronizarStatusEquipamentoPelaManutencao_(equipamento.ID_EQUIPAMENTO);
+    return r;
+  });
+
+  invalidarCachePainel_(unidade);
+  anexarTemposManutencao_(registro);
+  // E-mail por último e sem trava: é "bônus" (já não trava o registro se
+  // falhar — ver notificarNovaManutencao_) e agora também não faz mais
+  // ninguém, de nenhuma unidade, esperar na fila enquanto o Gmail responde.
+  notificarNovaManutencao_(registro);
+  return { ok: true, data: registro };
+}
+
+// Mantém o STATUS do equipamento em EQUIPAMENTOS coerente com as
+// manutenções abertas para ele: se existe qualquer manutenção "aberta" OU
+// "andamento" para o equipamento, ele vira/continua "manutencao" — desde
+// a abertura, não só quando alguém marca "Em andamento". Só volta para
+// "em_uso" quando NENHUMA manutenção dele estiver mais "aberta" nem
+// "andamento" (ou seja, todas concluídas). Não mexe em equipamento que o
+// admin marcou manualmente como "parado" ou "inativo" ao reverter — só
+// desfaz o que esta própria sincronização colocou como "manutencao".
+function sincronizarStatusEquipamentoPelaManutencao_(idEquipamento) {
+  const equipamento = findRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', idEquipamento);
+  if (!equipamento) return;
+
+  const temManutencaoAtiva = readSheet_(SHEETS.MANUTENCOES).some(function (m) {
+    return String(m.ID_EQUIPAMENTO) === String(idEquipamento) &&
+      manutencaoAtiva_(m);
+  });
+
+  const statusAtual = String(equipamento.STATUS);
+  const agora = nowIso_();
+  if (temManutencaoAtiva) {
+    if (statusAtual !== 'manutencao') {
+      updateRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', idEquipamento, { STATUS: 'manutencao', STATUS_DESDE: agora });
+      registrarHistoricoStatus_(equipamento, statusAtual, 'manutencao', agora);
+    }
+  } else if (statusAtual === 'manutencao') {
+    updateRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', idEquipamento, { STATUS: 'em_uso', STATUS_DESDE: agora });
+    registrarHistoricoStatus_(equipamento, statusAtual, 'em_uso', agora);
+  }
+}
+
+// ======================= [NOVO 17/09] HISTÓRICO DE STATUS DO EQUIPAMENTO =======================
+// Grava uma linha toda vez que o status de um equipamento muda de verdade
+// (nunca quando o status "novo" é igual ao anterior). É esse histórico que
+// permite calcular horas em manutenção/parado/em uso DENTRO de um período
+// escolhido pelo usuário (semana, mês, personalizado) — antes disso só
+// dava pra saber o estado ATUAL e desde quando (STATUS_DESDE), não o
+// acumulado de um período passado.
+// [OUT/2026] O histórico é complementar: se a gravação dele falhar (ex.:
+// aba ainda não criada), o cadastro/mudança de status que o disparou não
+// pode ficar pela metade nem devolver erro.
+function registrarHistoricoStatus_(equipamento, statusAnterior, statusNovo, quando) {
+  try { registrarHistoricoStatusInterno_(equipamento, statusAnterior, statusNovo, quando); }
+  catch (e) { /* segue sem histórico */ }
+}
+
+function registrarHistoricoStatusInterno_(equipamento, statusAnterior, statusNovo, quando) {
+  if (String(statusAnterior) === String(statusNovo)) return;
+  const idHistorico = nextId_('HIST');
+  appendRow_(SHEETS.STATUS_HISTORICO, {
+    ID_HISTORICO: idHistorico,
+    UNIDADE: equipamento.UNIDADE,
     ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
     NOME_EQUIPAMENTO: equipamento.NOME,
-    TIPO: tipo,
-    PRIORIDADE: prioridade,
-    TITULO: titulo,
-    DESCRICAO: textoLimpo_(p.descricao),
-    STATUS: status,
-    DATA_PREVISTA: dataPrevista,
-    ABERTA_EM: agora,
-    INICIADA_EM: status === 'andamento' || status === 'concluida' ? (normalizarDataIso_(p.iniciadaEm) || agora) : '',
-    CONCLUIDA_EM: status === 'concluida' ? (normalizarDataIso_(p.concluidaEm) || agora) : ''
-  };
-  appendRow_(SHEETS.MANUTENCOES, registro);
-  return { ok: true, data: registro };
+    STATUS_ANTERIOR: statusAnterior || '',
+    STATUS_NOVO: statusNovo,
+    DATA_HORA: quando
+  });
+}
+
+// Reconstrói, para UM equipamento, a linha do tempo de status como uma
+// lista de "segmentos" { status, inicio (Date), fim (Date) } cobrindo
+// desde o mais antigo ponto conhecido até agora. Se o equipamento não tem
+// nenhum histórico registrado ainda (cadastrado antes desta função
+// existir, e sem nenhuma troca de status desde então), usa STATUS_DESDE
+// como aproximação — mesma lógica já usada em "tempo parado" no resto do
+// app.
+function segmentosStatusEquipamento_(equipamento, historicoOrdenadoAsc) {
+  const agora = new Date();
+  const segmentos = [];
+  const statusDesde = parseData_(equipamento.STATUS_DESDE) || parseData_(equipamento.CRIADO_EM);
+
+  if (!historicoOrdenadoAsc.length) {
+    segmentos.push({ status: String(equipamento.STATUS), inicio: statusDesde || agora, fim: agora });
+    return segmentos;
+  }
+
+  const primeiraData = parseData_(historicoOrdenadoAsc[0].DATA_HORA);
+  // Cobre o "vão" entre STATUS_DESDE e a primeira mudança registrada, se
+  // houver — acontece com equipamento cadastrado antes desta aba existir.
+  if (statusDesde && primeiraData && statusDesde < primeiraData && historicoOrdenadoAsc[0].STATUS_ANTERIOR) {
+    segmentos.push({ status: String(historicoOrdenadoAsc[0].STATUS_ANTERIOR), inicio: statusDesde, fim: primeiraData });
+  }
+  for (let i = 0; i < historicoOrdenadoAsc.length; i++) {
+    const inicio = parseData_(historicoOrdenadoAsc[i].DATA_HORA);
+    if (!inicio) continue;
+    const fim = (i + 1 < historicoOrdenadoAsc.length) ? parseData_(historicoOrdenadoAsc[i + 1].DATA_HORA) : agora;
+    segmentos.push({ status: String(historicoOrdenadoAsc[i].STATUS_NOVO), inicio: inicio, fim: fim || agora });
+  }
+  return segmentos;
+}
+
+// Soma, por status, quantos milissegundos os segmentos passam DENTRO da
+// janela do período pedido (recorta nas duas pontas). Devolve um objeto
+// { em_uso, manutencao, parado, inativo } em ms.
+function horasPorStatusNoPeriodo_(segmentos, janela, setor) {
+  const totais = { em_uso: 0, manutencao: 0, parado: 0, inativo: 0 };
+  segmentos.forEach(function (s) {
+    let inicio = s.inicio, fim = s.fim;
+    if (!inicio || !fim) return;
+    if (janela.fim && inicio > janela.fim) return;
+    if (janela.inicio && fim < janela.inicio) return;
+    if (janela.inicio && inicio < janela.inicio) inicio = janela.inicio;
+    if (janela.fim && fim > janela.fim) fim = janela.fim;
+    const ms = msExpediente_(inicio, fim, setor); // [FLUXO OUT/2026] só horas de expediente do setor
+    if (totais[s.status] !== undefined) totais[s.status] += ms;
+  });
+  return totais;
+}
+
+// EXECUTAR UMA VEZ SÓ, na mão, pelo editor do Apps Script (▶ Executar),
+// depois de colar este Code.gs. Corrige retroativamente os equipamentos
+// que já tinham uma manutenção aberta/em andamento ANTES desta correção
+// existir (a sincronização automática só passa a valer para manutenções
+// criadas ou atualizadas DAQUI PRA FRENTE — uma manutenção que já estava
+// aberta nunca disparou o gatilho, então o equipamento dela ficou parado
+// no status antigo até rodar isto aqui uma vez).
+function corrigirStatusEquipamentosExistentes() {
+  const equipamentos = readSheet_(SHEETS.EQUIPAMENTOS);
+  let corrigidos = 0;
+  equipamentos.forEach(function (e) {
+    sincronizarStatusEquipamentoPelaManutencao_(e.ID_EQUIPAMENTO);
+    corrigidos++;
+  });
+  Logger.log('Verificados ' + corrigidos + ' equipamentos.');
 }
 
 // A mudança de status controla sozinha INICIADA_EM e CONCLUIDA_EM:
@@ -1238,6 +2599,8 @@ function atualizarManutencao_(p) {
     updates.TITULO = titulo;
   }
   if (p.descricao !== undefined) updates.DESCRICAO = textoLimpo_(p.descricao);
+  if (p.categoria !== undefined) updates.CATEGORIA = textoLimpo_(p.categoria);
+  if (p.subcategoria !== undefined) updates.SUBCATEGORIA = textoLimpo_(p.subcategoria);
 
   if (p.tipo !== undefined) {
     const tipo = textoLimpo_(p.tipo).toLowerCase();
@@ -1258,36 +2621,96 @@ function atualizarManutencao_(p) {
     const tipoFinal = updates.TIPO || String(atual.TIPO);
     updates.DATA_PREVISTA = tipoFinal === 'preventiva' ? normalizarDataIso_(p.dataPrevista) : '';
   }
+  // [OUT/2026] Prestador de serviço que atende o chamado.
+  if (p.prestador !== undefined) updates.PRESTADOR = textoLimpo_(p.prestador);
+  // [OUT/2026] Causa raiz e o que foi feito — informados ao finalizar.
+  if (p.causaRaiz !== undefined) updates.CAUSA_RAIZ = textoLimpo_(p.causaRaiz);
+  if (p.solucao !== undefined) updates.SOLUCAO = textoLimpo_(p.solucao);
+  // [OUT/2026] Correção da data/hora de abertura — só o administrador.
+  if (p.abertaEm !== undefined && p.abertaEm !== null && p.abertaEm !== '') {
+    if (p._tipoSessao && p._tipoSessao !== 'ADMIN') throw new Error('Só o administrador pode mudar a data de abertura do chamado.');
+    const novaAbertura = normalizarDataIso_(p.abertaEm);
+    if (!novaAbertura) throw new Error('Data de abertura inválida.');
+    updates.ABERTA_EM = novaAbertura;
+  }
 
   if (p.status !== undefined) {
     const status = textoLimpo_(p.status).toLowerCase();
-    if (['aberta', 'andamento', 'concluida'].indexOf(status) === -1) {
-      throw new Error('Status inválido: ' + status + '. Use aberta, andamento ou concluida.');
+    if (STATUS_MANUTENCAO_VALIDOS.indexOf(status) === -1) {
+      throw new Error('Status inválido: ' + status + '. Use aberta, acionado, andamento ou concluida.');
+    }
+    // [FLUXO OUT/2026] Quem muda o status do chamado é o administrador.
+    if (status !== String(atual.STATUS) && p._tipoSessao && p._tipoSessao !== 'ADMIN') {
+      throw new Error('Só o administrador pode mudar o status da manutenção.');
     }
     updates.STATUS = status;
     const agora = nowIso_();
+    const acionadoAtual = normalizarDataIso_(atual.ACIONADO_EM);
     const iniciadaAtual = normalizarDataIso_(atual.INICIADA_EM);
+    const acionadoInformado = p.acionadoEm !== undefined ? normalizarDataIso_(p.acionadoEm) : '';
 
+    // aberta → acionado → andamento → concluida. Cada passo carimba a sua
+    // data/hora; voltar um passo limpa os carimbos que deixaram de valer.
     if (status === 'aberta') {
+      updates.ACIONADO_EM = '';
+      updates.INICIADA_EM = '';
+      updates.CONCLUIDA_EM = '';
+    } else if (status === 'acionado') {
+      updates.ACIONADO_EM = acionadoInformado || acionadoAtual || agora;
       updates.INICIADA_EM = '';
       updates.CONCLUIDA_EM = '';
     } else if (status === 'andamento') {
+      if (acionadoInformado) updates.ACIONADO_EM = acionadoInformado;
       updates.INICIADA_EM = normalizarDataIso_(p.iniciadaEm) || iniciadaAtual || agora;
       updates.CONCLUIDA_EM = '';
     } else {
-      updates.INICIADA_EM = normalizarDataIso_(p.iniciadaEm) || iniciadaAtual || normalizarDataIso_(atual.ABERTA_EM) || agora;
+      if (acionadoInformado) updates.ACIONADO_EM = acionadoInformado;
+      // Finalizou sem passar por "em andamento": o início vale a partir do
+      // último carimbo conhecido (acionamento, ou a própria abertura).
+      updates.INICIADA_EM = normalizarDataIso_(p.iniciadaEm) || iniciadaAtual || acionadoInformado || acionadoAtual ||
+        normalizarDataIso_(atual.ABERTA_EM) || agora;
       updates.CONCLUIDA_EM = normalizarDataIso_(p.concluidaEm) || normalizarDataIso_(atual.CONCLUIDA_EM) || agora;
     }
   } else {
+    if (p.acionadoEm !== undefined) updates.ACIONADO_EM = normalizarDataIso_(p.acionadoEm);
     // Correção manual de data sem trocar o status.
     if (p.iniciadaEm !== undefined) updates.INICIADA_EM = normalizarDataIso_(p.iniciadaEm);
     if (p.concluidaEm !== undefined) updates.CONCLUIDA_EM = normalizarDataIso_(p.concluidaEm);
   }
 
-  updateRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', id, updates);
+  // As datas têm de andar para a frente: abertura ≤ acionamento ≤ início ≤ fim.
+  // O campo de data/hora do app só vai até o MINUTO, e os carimbos
+  // automáticos têm segundos: um passo dado no mesmo minuto do anterior
+  // chegava como "14:20:00", antes de "14:20:37", e era recusado. Dentro do
+  // mesmo minuto a data é ajustada para o carimbo anterior; só diferença de
+  // um minuto ou mais é erro de verdade.
+  const valorDe = function (campo) { return updates[campo] !== undefined ? updates[campo] : atual[campo]; };
+  const emOrdem = function (campoAntes, campoDepois, mensagem) {
+    const antes = parseData_(valorDe(campoAntes)), depois = parseData_(valorDe(campoDepois));
+    if (!antes || !depois || depois >= antes) return;
+    if (Math.floor(depois.getTime() / 60000) === Math.floor(antes.getTime() / 60000)) {
+      updates[campoDepois] = normalizarDataIso_(valorDe(campoAntes));
+      return;
+    }
+    throw new Error(mensagem);
+  };
+  emOrdem('ABERTA_EM', 'ACIONADO_EM', 'O acionamento do técnico não pode ser antes da abertura do chamado.');
+  emOrdem('ACIONADO_EM', 'INICIADA_EM', 'O início da manutenção não pode ser antes do acionamento do técnico.');
+  emOrdem('ABERTA_EM', 'INICIADA_EM', 'O início da manutenção não pode ser antes da abertura do chamado.');
+  emOrdem('INICIADA_EM', 'CONCLUIDA_EM', 'O fim da manutenção não pode ser antes do início.');
+
+  const mudouStatus = updates.STATUS !== undefined && updates.STATUS !== String(atual.STATUS);
+  comTravaEscrita_(function () {
+    updateRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', id, updates);
+    if (updates.STATUS !== undefined) sincronizarStatusEquipamentoPelaManutencao_(atual.ID_EQUIPAMENTO);
+  });
+  invalidarCachePainel_(atual.UNIDADE); // status ou datas mudaram → tempos do Painel mudaram
   const atualizada = findRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', id);
   atualizada.TEMPO_MANUTENCAO_MS = tempoEmManutencaoMs_(atualizada, null);
-  atualizada.TEMPO_MANUTENCAO_TEXTO = formatarDuracao_(atualizada.TEMPO_MANUTENCAO_MS);
+  atualizada.TEMPO_MANUTENCAO_TEXTO = formatarHoras_(atualizada.TEMPO_MANUTENCAO_MS);
+  anexarTemposManutencao_(atualizada);
+  // [OUT/2026 — 15/10] E-mail só na abertura (criarManutencao_) e na finalização.
+  if (mudouStatus && updates.STATUS === 'concluida') notificarManutencao_(atualizada);
   return { ok: true, data: atualizada };
 }
 
@@ -1295,6 +2718,1641 @@ function ordenarPorDataDesc_(a, b) {
   const da = parseData_(a);
   const db = parseData_(b);
   return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+}
+
+// ======================= TROCA DE GÁS =======================
+// Registro de troca de cilindro/botijão de gás de uma frota. O custo é
+// fixo por troca, conforme o fornecedor escolhido (tabela de preço por
+// unidade em CONFIG_FORNECEDORES_GAS). As "horas em operação" são
+// calculadas sozinhas: diferença entre o horímetro desta troca e o da
+// troca anterior da MESMA frota — é esse número que mede o intervalo
+// entre trocas para o relatório.
+
+function getFornecedoresGas_(unidade) {
+  const alvo = textoLimpo_(unidade);
+  return readSheet_(SHEETS.FORNECEDORES_GAS)
+    .filter(function (f) {
+      return String(f.ATIVO).toUpperCase() === 'SIM' && String(f.UNIDADE).trim() === alvo;
+    })
+    .map(function (f) { return { FORNECEDOR: f.FORNECEDOR, VALOR: Number(f.VALOR) || 0 }; })
+    .sort(function (a, b) { return String(a.FORNECEDOR).localeCompare(String(b.FORNECEDOR)); });
+}
+
+function getTrocasGas_(params) {
+  const janela = resolverPeriodo_(Object.assign({ periodo: params.periodo || 'todos' }, params));
+  let rows = filtrarPorUnidade_(readSheet_(SHEETS.TROCAS_GAS), params.unidade);
+
+  const idEquipamento = textoLimpo_(params.idEquipamento);
+  if (idEquipamento) rows = rows.filter(function (t) { return String(t.ID_EQUIPAMENTO) === idEquipamento; });
+
+  rows = rows.filter(function (t) { return dentroDoPeriodo_(t.DATA_HORA, janela); });
+
+  return rows.sort(function (a, b) { return ordenarPorDataDesc_(a.DATA_HORA, b.DATA_HORA); });
+}
+
+// Última troca de gás registrada para uma frota (a mais recente por data),
+// usada para calcular as horas em operação da troca nova.
+function ultimaTrocaGasDaFrota_(idEquipamento) {
+  const trocas = readSheet_(SHEETS.TROCAS_GAS)
+    .filter(function (t) { return String(t.ID_EQUIPAMENTO) === String(idEquipamento); })
+    .sort(function (a, b) { return ordenarPorDataDesc_(a.DATA_HORA, b.DATA_HORA); });
+  return trocas.length ? trocas[0] : null;
+}
+
+// Acima deste número de horas entre duas trocas da mesma frota, a troca
+// só é gravada se o operador confirmar. Mesmo valor do app.js.
+const LIMITE_HORAS_ENTRE_TROCAS = 25;
+
+function criarTrocaGas_(p) {
+  const unidade = exigirUnidade_(p.unidade);
+  validarAcessoUnidade_(p.idUsuario, unidade);
+
+  const equipamento = equipamentoDaUnidade_(p.idEquipamento, unidade);
+  const responsavel = textoLimpo_(p.responsavel);
+  if (!responsavel) throw new Error('Selecione o responsável pela troca de gás.');
+
+  const horimetro = Number(p.horimetro);
+  if (!p.horimetro && p.horimetro !== 0) throw new Error('Informe o horímetro da frota.');
+  if (isNaN(horimetro) || horimetro < 0) throw new Error('Horímetro inválido.');
+
+  const fornecedor = textoLimpo_(p.fornecedor);
+  if (!fornecedor) throw new Error('Selecione o fornecedor do gás.');
+  const fornecedores = getFornecedoresGas_(unidade);
+  const fornecedorInfo = fornecedores.find(function (f) { return String(f.FORNECEDOR) === fornecedor; });
+  if (!fornecedorInfo) {
+    throw new Error('Fornecedor "' + fornecedor + '" não está configurado para a unidade ' + unidade + '.');
+  }
+
+  const anterior = ultimaTrocaGasDaFrota_(equipamento.ID_EQUIPAMENTO);
+  const horimetroAnterior = anterior ? Number(anterior.HORIMETRO) : null;
+  if (horimetroAnterior !== null && horimetro < horimetroAnterior) {
+    throw new Error(
+      'O horímetro informado (' + horimetro + ') é menor que o da última troca desta frota (' +
+      horimetroAnterior + '). Confira o valor antes de salvar.'
+    );
+  }
+  const horasOperacao = horimetroAnterior !== null ? Math.round((horimetro - horimetroAnterior) * 100) / 100 : null;
+  // [OUT/2026] Trava de digitação: horas demais entre uma troca e outra
+  // quase sempre é horímetro digitado errado. Não bloqueia — o app mostra
+  // o aviso e o operador confirma ("Está certo, salvar"), e aí o pedido
+  // volta com confirmarHorasAltas.
+  const confirmouHoras = p.confirmarHorasAltas === true || String(p.confirmarHorasAltas) === 'true';
+  if (horasOperacao !== null && horasOperacao > LIMITE_HORAS_ENTRE_TROCAS && !confirmouHoras) {
+    throw new Error(
+      'Verifique o horímetro: está dando ' + String(horasOperacao).replace('.', ',') +
+      ' horas desde a última troca desta frota, acima das ' + LIMITE_HORAS_ENTRE_TROCAS +
+      'h esperadas. Horímetro anterior: ' + horimetroAnterior + ' · informado agora: ' + horimetro + '.'
+    );
+  }
+  const agora = nowIso_();
+
+  // [NOVO 17/09] Quantidade de gás em kg — opcional (nem todo fornecedor
+  // informa isso na hora, e trocas antigas nunca tiveram esse campo), mas
+  // se vier, precisa ser um número válido maior que zero. Ex.: cilindro
+  // P20 = 20kg.
+  let quantidadeKg = '';
+  if (p.quantidadeKg !== undefined && p.quantidadeKg !== null && p.quantidadeKg !== '') {
+    const kg = Number(p.quantidadeKg);
+    if (isNaN(kg) || kg <= 0) throw new Error('Quantidade de gás (kg) inválida.');
+    quantidadeKg = kg;
+  }
+
+  // [PERF 14/09] Não tem foto nem e-mail aqui, então o ganho é só o
+  // mesmo de sempre: trava só ao redor de ID + gravação, não das
+  // validações acima (que já rodaram fora da trava).
+  const idTroca = comTravaEscrita_(function () {
+    const id = nextId_('GAS');
+    appendRow_(SHEETS.TROCAS_GAS, {
+      ID_TROCA_GAS: id,
+      UNIDADE: unidade,
+      ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO,
+      NOME_EQUIPAMENTO: equipamento.NOME,
+      RESPONSAVEL: responsavel,
+      FORNECEDOR: fornecedor,
+      HORIMETRO: horimetro,
+      HORIMETRO_ANTERIOR: horimetroAnterior !== null ? horimetroAnterior : '',
+      HORAS_OPERACAO: horasOperacao !== null ? horasOperacao : '',
+      CUSTO: fornecedorInfo.VALOR,
+      DATA_HORA: agora,
+      QUANTIDADE_KG: quantidadeKg
+    });
+    return id;
+  });
+
+  return {
+    ok: true,
+    data: {
+      idTrocaGas: idTroca, dataHora: agora, custo: fornecedorInfo.VALOR,
+      horasOperacao: horasOperacao, horimetroAnterior: horimetroAnterior
+    }
+  };
+}
+
+// [OUT/2026] Exclusão de troca de gás lançada por engano — só Administrador
+// (a ação está em ACOES_ADMIN). A troca seguinte da mesma frota tem o
+// horímetro anterior e as horas de uso refeitos, para o relatório não ficar
+// com a conta baseada na troca apagada.
+function deletarTrocaGas_(p) {
+  const id = textoLimpo_(p.idTrocaGas);
+  if (!id) throw new Error('Informe a troca de gás a excluir.');
+  const atual = findRowById_(SHEETS.TROCAS_GAS, 'ID_TROCA_GAS', id);
+  if (!atual) throw new Error('Troca de gás não encontrada.');
+  validarAcessoUnidade_(p.idUsuario, atual.UNIDADE);
+
+  const quando = parseData_(atual.DATA_HORA);
+  const outras = readSheet_(SHEETS.TROCAS_GAS).filter(function (t) {
+    return String(t.ID_EQUIPAMENTO) === String(atual.ID_EQUIPAMENTO) && String(t.ID_TROCA_GAS) !== id;
+  }).sort(function (a, b) { return ordenarPorDataDesc_(b.DATA_HORA, a.DATA_HORA); }); // mais antiga primeiro
+  let anterior = null, seguinte = null;
+  outras.forEach(function (t) {
+    const dt = parseData_(t.DATA_HORA);
+    if (!dt || !quando) return;
+    if (dt.getTime() < quando.getTime()) anterior = t;
+    else if (!seguinte) seguinte = t;
+  });
+
+  removeRowById_(SHEETS.TROCAS_GAS, 'ID_TROCA_GAS', id);
+  if (seguinte) {
+    const hAnt = anterior ? Number(anterior.HORIMETRO) : NaN;
+    const hSeg = Number(seguinte.HORIMETRO);
+    const temConta = !isNaN(hAnt) && !isNaN(hSeg);
+    updateRowById_(SHEETS.TROCAS_GAS, 'ID_TROCA_GAS', seguinte.ID_TROCA_GAS, {
+      HORIMETRO_ANTERIOR: temConta ? hAnt : '',
+      HORAS_OPERACAO: temConta ? Math.max(0, hSeg - hAnt) : ''
+    });
+  }
+  return { ok: true, data: { ID_TROCA_GAS: id, removido: true } };
+}
+
+// ======================= VISÃO GERAL (GERENTE / TODAS AS UNIDADES) =======================
+
+/**
+ * Comparativo de todas as unidades ativas, lado a lado: quantidade de
+ * equipamentos por status (em uso / manutenção / parado / inativo) e
+ * quantos checklists já foram feitos hoje, unidade por unidade — sem
+ * misturar tudo num total só (isso já existe em getPainel_ com
+ * unidade = 'TODAS'; esta função aqui é o comparativo lado a lado, para
+ * a tela "Todas as Unidades" do usuário com UNIDADE = TODAS).
+ */
+function getVisaoGeralUnidades_() {
+  const agora = new Date();
+  const unidadesAtivas = readSheet_(SHEETS.UNIDADES).filter(function (u) {
+    return String(u.ATIVO).toUpperCase() === 'SIM';
+  });
+  const equipamentos = filtrarPorSetor_(readSheet_(SHEETS.EQUIPAMENTOS));
+  const checklists = filtrarPorSetor_(readSheet_(SHEETS.CHECKLISTS));
+
+  const totaisGerais = { total: 0, em_uso: 0, manutencao: 0, parado: 0, inativo: 0 };
+
+  const unidades = unidadesAtivas.map(function (u) {
+    const nomeUnidade = String(u.UNIDADE).trim();
+    const equipUnidade = equipamentos.filter(function (e) { return String(e.UNIDADE).trim() === nomeUnidade; });
+
+    const totais = { total: equipUnidade.length, em_uso: 0, manutencao: 0, parado: 0, inativo: 0 };
+    equipUnidade.forEach(function (e) {
+      const s = String(e.STATUS);
+      if (totais[s] !== undefined) totais[s]++;
+    });
+
+    totaisGerais.total += totais.total;
+    totaisGerais.em_uso += totais.em_uso;
+    totaisGerais.manutencao += totais.manutencao;
+    totaisGerais.parado += totais.parado;
+    totaisGerais.inativo += totais.inativo;
+
+    // Checklist do dia só é exigido de quem está realmente em uso — Parado e
+    // Em manutenção não entram nem no total, nem nos pendentes (equipamento
+    // fora de operação não tem o que "verificar antes de usar" hoje).
+    const emUsoUnidade = equipUnidade.filter(function (e) { return String(e.STATUS) === 'em_uso'; });
+    const checklistsHojeUnidade = checklists.filter(function (c) {
+      if (String(c.UNIDADE).trim() !== nomeUnidade) return false;
+      const d = parseData_(c.DATA_HORA);
+      return !!d && mesmoDia_(d, agora);
+    });
+    const feitosHojeIds = {};
+    checklistsHojeUnidade.forEach(function (c) { feitosHojeIds[String(c.ID_EQUIPAMENTO)] = true; });
+    const feitos = emUsoUnidade.filter(function (e) { return feitosHojeIds[String(e.ID_EQUIPAMENTO)]; }).length;
+
+    return {
+      ID_UNIDADE: u.ID_UNIDADE,
+      UNIDADE: u.UNIDADE,
+      total: totais.total,
+      em_uso: totais.em_uso,
+      manutencao: totais.manutencao,
+      parado: totais.parado,
+      inativo: totais.inativo,
+      checklistsHoje: { feitos: feitos, total: emUsoUnidade.length }
+    };
+  }).sort(function (a, b) { return String(a.UNIDADE).localeCompare(String(b.UNIDADE)); });
+
+  return {
+    geradoEm: nowIso_(),
+    totalUnidades: unidades.length,
+    totais: totaisGerais,
+    unidades: unidades
+  };
+}
+
+/**
+ * [OUT/2026] Comparativo entre as unidades no período escolhido — tela
+ * "Todas as unidades" do gerente. Para cada unidade ativa: troca de gás
+ * (trocas, custo, kg, horas entre trocas, custo por hora, fornecedores e
+ * as frotas que se destacam) e manutenção (quantidade de chamados e as
+ * máquinas com mais e menos tempo em manutenção). Respeita o setor do
+ * pedido, como o resto da tela.
+ */
+function getComparativoUnidades_(params) {
+  params = params || {};
+  const janela = resolverPeriodo_(Object.assign({ periodo: params.periodo || 'mes' }, params));
+  const r2 = function (v) { return Math.round(v * 100) / 100; };
+  const r1 = function (v) { return Math.round(v * 10) / 10; };
+  const temValor = function (v) { return v !== '' && v !== null && v !== undefined; };
+  const todasTrocas = readSheet_(SHEETS.TROCAS_GAS);
+  const todasManut = readSheet_(SHEETS.MANUTENCOES);
+
+  const resumoGas = function (trocas) {
+    let custo = 0, horas = 0, comHoras = 0, kg = 0, comKg = 0;
+    const fornecedores = {}, frotas = {};
+    trocas.forEach(function (t) {
+      const c = Number(t.CUSTO) || 0;
+      custo += c;
+      const f = textoLimpo_(t.FORNECEDOR) || '(sem fornecedor)';
+      if (!fornecedores[f]) fornecedores[f] = { nome: f, custo: 0, trocas: 0 };
+      fornecedores[f].custo += c; fornecedores[f].trocas++;
+      const k = String(t.ID_EQUIPAMENTO);
+      if (!frotas[k]) frotas[k] = { nome: t.NOME_EQUIPAMENTO, custo: 0, trocas: 0, horas: 0, comHoras: 0 };
+      frotas[k].custo += c; frotas[k].trocas++;
+      if (temValor(t.HORAS_OPERACAO)) {
+        const h = Number(t.HORAS_OPERACAO) || 0;
+        horas += h; comHoras++;
+        frotas[k].horas += h; frotas[k].comHoras++;
+      }
+      if (temValor(t.QUANTIDADE_KG)) { kg += Number(t.QUANTIDADE_KG) || 0; comKg++; }
+    });
+    const lista = Object.keys(frotas).map(function (k) { return frotas[k]; });
+    const melhor = function (itens, valor, menor) {
+      let escolhido = null;
+      itens.forEach(function (f) {
+        const v = valor(f);
+        if (escolhido === null || (menor ? v < escolhido.valor : v > escolhido.valor)) {
+          escolhido = { nome: f.nome, valor: v, trocas: f.trocas };
+        }
+      });
+      return escolhido;
+    };
+    const comUso = lista.filter(function (f) { return f.horas > 0; });
+    const comIntervalo = lista.filter(function (f) { return f.comHoras > 0; });
+    const intervalo = function (f) { return r1(f.horas / f.comHoras); };
+    return {
+      totalTrocas: trocas.length,
+      custoTotal: r2(custo),
+      custoMedioPorTroca: trocas.length ? r2(custo / trocas.length) : 0,
+      kgTotal: r2(kg), trocasComKg: comKg,
+      horasTotal: r1(horas),
+      horaMedia: comHoras ? r1(horas / comHoras) : 0,
+      custoMedioPorHora: horas > 0 ? r2(custo / horas) : 0,
+      frotasComTroca: lista.length,
+      fornecedores: Object.keys(fornecedores).map(function (k) {
+        return { nome: fornecedores[k].nome, custo: r2(fornecedores[k].custo), trocas: fornecedores[k].trocas };
+      }).sort(function (a, b) { return b.custo - a.custo; }),
+      maiorCusto: melhor(lista, function (f) { return r2(f.custo); }),
+      maisHoras: melhor(comUso, function (f) { return r1(f.horas); }),
+      maiorCustoPorHora: melhor(comUso, function (f) { return r2(f.custo / f.horas); }),
+      menorCustoPorHora: melhor(comUso, function (f) { return r2(f.custo / f.horas); }, true),
+      maiorIntervalo: melhor(comIntervalo, intervalo),
+      menorIntervalo: melhor(comIntervalo, intervalo, true)
+    };
+  };
+
+  const resumoManutencao = function (manutencoes) {
+    const maquinas = {};
+    let tempoTotal = 0, concluidas = 0;
+    manutencoes.forEach(function (m) {
+      const ms = tempoEmManutencaoMs_(m, janela) || 0;
+      tempoTotal += ms;
+      if (String(m.STATUS) === 'concluida') concluidas++;
+      const k = String(m.ID_EQUIPAMENTO);
+      if (!maquinas[k]) maquinas[k] = { nome: m.NOME_EQUIPAMENTO, ms: 0, quantidade: 0 };
+      maquinas[k].ms += ms; maquinas[k].quantidade++;
+    });
+    const lista = Object.keys(maquinas).map(function (k) { return maquinas[k]; })
+      .sort(function (a, b) { return b.ms - a.ms; });
+    const item = function (f) { return f ? { nome: f.nome, ms: f.ms, texto: formatarHoras_(f.ms), quantidade: f.quantidade } : null; };
+    return {
+      total: manutencoes.length,
+      concluidas: concluidas,
+      ativas: manutencoes.length - concluidas,
+      maquinasComManutencao: lista.length,
+      tempoTotalMs: tempoTotal, tempoTotalTexto: formatarHoras_(tempoTotal),
+      maiorTempo: item(lista[0]),
+      menorTempo: lista.length > 1 ? item(lista[lista.length - 1]) : null
+    };
+  };
+
+  const unidades = readSheet_(SHEETS.UNIDADES).filter(function (u) {
+    return String(u.ATIVO).toUpperCase() === 'SIM';
+  }).map(function (u) {
+    const nome = String(u.UNIDADE).trim();
+    const trocas = filtrarPorUnidade_(todasTrocas, nome).filter(function (t) { return dentroDoPeriodo_(t.DATA_HORA, janela); });
+    const manut = filtrarPorUnidade_(todasManut, nome).filter(function (m) { return dentroDoPeriodo_(m.ABERTA_EM, janela); });
+    return { ID_UNIDADE: u.ID_UNIDADE, UNIDADE: nome, gas: resumoGas(trocas), manutencao: resumoManutencao(manut) };
+  }).sort(function (a, b) { return String(a.UNIDADE).localeCompare(String(b.UNIDADE)); });
+
+  const trocasGeral = filtrarPorSetor_(todasTrocas).filter(function (t) { return dentroDoPeriodo_(t.DATA_HORA, janela); });
+  const manutGeral = filtrarPorSetor_(todasManut).filter(function (m) { return dentroDoPeriodo_(m.ABERTA_EM, janela); });
+
+  return {
+    geradoEm: nowIso_(),
+    periodo: { tipo: janela.tipo, label: janela.label },
+    expediente: descricaoExpediente_(SETOR_PEDIDO_),
+    unidades: unidades,
+    total: { gas: resumoGas(trocasGeral), manutencao: resumoManutencao(manutGeral) }
+  };
+}
+
+// [OUT/2026] Colunas novas: horímetro no checklist (inicial, final e a hora
+// do fechamento) e na manutenção. Entram no fim de cada aba, sozinhas, no
+// primeiro pedido depois da atualização; também pode ser rodada à mão:
+// ▶ Executar > configurarColunasHorimetro.
+function configurarColunasHorimetro() {
+  [[SHEETS.CHECKLISTS, ['HORIMETRO_INICIAL', 'HORIMETRO_FINAL', 'FECHADO_EM']],
+   [SHEETS.MANUTENCOES, ['HORIMETRO', 'FOTOS', 'PRESTADOR', 'CAUSA_RAIZ', 'SOLUCAO', 'CATEGORIA', 'SUBCATEGORIA', 'ABERTO_POR']],
+   [SHEETS.EQUIPAMENTOS, ['MOTORIZACAO']]].forEach(function (par) {
+    const sh = sheet_(par[0]);
+    par[1].forEach(function (nome) {
+      const col = HEADERS[par[0]].indexOf(nome) + 1;
+      const atual = String(sh.getRange(1, col).getValue() || '').trim();
+      if (atual === nome) return;
+      if (atual) {
+        throw new Error('A aba ' + par[0] + ' já tem a coluna "' + atual + '" na posição ' + col +
+          ', onde deveria entrar ' + nome + '. Mova essa coluna para depois e rode configurarColunasHorimetro() de novo.');
+      }
+      sh.getRange(1, col).setValue(nome).setFontWeight('bold');
+    });
+  });
+  PropertiesService.getScriptProperties().setProperty('horimetro_v5_ok', 'SIM');
+  SpreadsheetApp.flush();
+  return 'Colunas novas prontas nas abas CHECKLISTS, MANUTENCOES e EQUIPAMENTOS.';
+}
+
+function garantirColunasHorimetro_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache.get('horimetro_v5_ok')) return;
+    if (PropertiesService.getScriptProperties().getProperty('horimetro_v5_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('horimetro_v5_ok') !== 'SIM') configurarColunasHorimetro();
+      } finally { lock.releaseLock(); }
+    }
+    cache.put('horimetro_v5_ok', '1', 21600);
+  } catch (e) { /* rode configurarColunasHorimetro() à mão se as colunas não aparecerem */ }
+}
+
+// Horímetro opcional vindo do app: '' quando não informado; erro se inválido.
+function horimetroOpcional_(valor, rotulo) {
+  if (valor === undefined || valor === null || String(valor).trim() === '') return '';
+  const n = Number(valor);
+  if (isNaN(n) || n < 0) throw new Error((rotulo || 'Horímetro') + ' inválido.');
+  return n;
+}
+
+// Não conformidades ABERTAS de um equipamento, por item (em minúsculas).
+function ncsAbertasDoEquipamento_(idEquipamento) {
+  const mapa = {};
+  readSheet_(SHEETS.NAO_CONFORMIDADES).forEach(function (nc) {
+    if (String(nc.STATUS) === 'aberta' && String(nc.ID_EQUIPAMENTO) === String(idEquipamento)) {
+      mapa[textoLimpo_(nc.ITEM).toLowerCase()] = nc;
+    }
+  });
+  return mapa;
+}
+
+// O que o formulário do checklist precisa saber de um equipamento antes de
+// ser preenchido: os itens que já têm não conformidade aberta (para o
+// operador não ter que descrever e fotografar o mesmo problema de novo).
+// Liberado para o Operador — só devolve o resumo, não a tela de NCs.
+function getPendenciasEquipamento_(params) {
+  const id = textoLimpo_(params.idEquipamento);
+  if (!id) return [];
+  const mapa = ncsAbertasDoEquipamento_(id);
+  return Object.keys(mapa).map(function (k) {
+    const nc = mapa[k];
+    return { idNc: nc.ID_NC, item: nc.ITEM, descricao: nc.DESCRICAO, foto: nc.FOTO, abertaEm: nc.ABERTA_EM };
+  });
+}
+
+// Fechamento do checklist no fim do turno: o operador informa o horímetro
+// final da máquina. Só quem fez o checklist (ou um Administrador) fecha.
+function fecharChecklist_(p) {
+  const id = textoLimpo_(p.idChecklist);
+  if (!id) throw new Error('Informe o checklist a fechar.');
+  const atual = findRowById_(SHEETS.CHECKLISTS, 'ID_CHECKLIST', id);
+  if (!atual) throw new Error('Checklist não encontrado.');
+  validarAcessoUnidade_(p.idUsuario, atual.UNIDADE);
+  if (textoLimpo_(atual.FECHADO_EM)) throw new Error('Este checklist já foi fechado.');
+
+  const usuario = findRowById_(SHEETS.USUARIOS, 'ID_USUARIO', p.idUsuario);
+  const ehAdmin = p._tipoSessao === 'ADMIN';
+  if (!ehAdmin && (!usuario || textoLimpo_(usuario.NOME) !== textoLimpo_(atual.RESPONSAVEL))) {
+    throw new Error('Só quem fez o checklist (' + atual.RESPONSAVEL + ') pode fechá-lo.');
+  }
+
+  const final = horimetroOpcional_(p.horimetroFinal, 'Horímetro final');
+  if (final === '') throw new Error('Informe o horímetro final da máquina.');
+  const inicial = atual.HORIMETRO_INICIAL === '' || atual.HORIMETRO_INICIAL === null || atual.HORIMETRO_INICIAL === undefined
+    ? null : Number(atual.HORIMETRO_INICIAL);
+  if (inicial !== null && !isNaN(inicial) && final < inicial) {
+    throw new Error('O horímetro final (' + final + ') é menor que o inicial deste checklist (' + inicial + '). Confira o valor.');
+  }
+  const agora = nowIso_();
+  updateRowById_(SHEETS.CHECKLISTS, 'ID_CHECKLIST', id, { HORIMETRO_FINAL: final, FECHADO_EM: agora });
+  invalidarCachePainel_(atual.UNIDADE);
+  return {
+    ok: true,
+    data: {
+      ID_CHECKLIST: id, HORIMETRO_INICIAL: inicial === null ? '' : inicial, HORIMETRO_FINAL: final, FECHADO_EM: agora,
+      horasTrabalhadas: inicial !== null && !isNaN(inicial) ? Math.round((final - inicial) * 100) / 100 : null
+    }
+  };
+}
+
+// ======================= PERGUNTAS POR TIPO DE EQUIPAMENTO =======================
+// [OUT/2026] O Administrador pode adicionar, alterar e excluir as perguntas
+// do checklist e da lavagem para cada TIPO de equipamento (Empilhadeira,
+// Lavadoras de Piso Industrial, Paleteira Elétrica…). Vale para todas as
+// unidades. Ficam na aba CONFIG_PERGUNTAS, criada sozinha na primeira
+// alteração. Tipo sem perguntas próprias usa a lista padrão do código
+// (CHECKLIST_ITENS_PADRAO / LAVAGEM_ITENS_PADRAO).
+const ABA_PERGUNTAS = 'CONFIG_PERGUNTAS';
+const COLUNAS_PERGUNTAS = ['ID_PERGUNTA', 'MODULO', 'TIPO_EQUIPAMENTO', 'ITEM', 'INSTRUCAO', 'ORDEM', 'ATIVO'];
+
+function moduloPerguntas_(valor) {
+  const m = textoLimpo_(valor).toLowerCase();
+  if (m !== 'checklist' && m !== 'lavagem') throw new Error('Formulário inválido. Use checklist ou lavagem.');
+  return m;
+}
+
+function perguntasPadrao_(modulo) {
+  return (modulo === 'lavagem' ? LAVAGEM_ITENS_PADRAO : CHECKLIST_ITENS_PADRAO).map(function (i) {
+    return { item: i.item, instrucao: i.instrucao };
+  });
+}
+
+// Linhas ATIVAS da aba para um formulário + tipo, na ordem. Sem a aba
+// (ninguém personalizou nada ainda), devolve vazio sem criar nada.
+function linhasPerguntas_(modulo, tipo) {
+  const alvo = textoLimpo_(tipo).toLowerCase();
+  if (!alvo || !SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ABA_PERGUNTAS)) return [];
+  return readSheet_(ABA_PERGUNTAS).filter(function (l) {
+    return String(l.MODULO).toLowerCase() === modulo &&
+      textoLimpo_(l.TIPO_EQUIPAMENTO).toLowerCase() === alvo &&
+      String(l.ATIVO).toUpperCase() === 'SIM';
+  }).sort(function (a, b) { return (Number(a.ORDEM) || 0) - (Number(b.ORDEM) || 0); });
+}
+
+// O que o formulário do app mostra para um equipamento daquele tipo.
+function perguntasDoTipo_(modulo, tipo) {
+  const linhas = linhasPerguntas_(modulo, tipo);
+  if (!linhas.length) return perguntasPadrao_(modulo);
+  return linhas.map(function (l) { return { item: String(l.ITEM), instrucao: String(l.INSTRUCAO || '') }; });
+}
+
+// Tela de administração: a lista do tipo e se ela é própria ou a padrão.
+function getPerguntas_(params) {
+  const modulo = moduloPerguntas_(params.modulo);
+  const tipo = textoLimpo_(params.tipo);
+  if (!tipo) throw new Error('Informe o tipo de equipamento.');
+  const linhas = linhasPerguntas_(modulo, tipo);
+  return {
+    modulo: modulo, tipo: tipo, personalizado: linhas.length > 0,
+    itens: linhas.length
+      ? linhas.map(function (l) { return { idPergunta: l.ID_PERGUNTA, item: String(l.ITEM), instrucao: String(l.INSTRUCAO || '') }; })
+      : perguntasPadrao_(modulo).map(function (i) { return { idPergunta: '', item: i.item, instrucao: i.instrucao }; })
+  };
+}
+
+function abaPerguntas_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(ABA_PERGUNTAS);
+  if (!sh) {
+    sh = ss.insertSheet(ABA_PERGUNTAS);
+    sh.getRange(1, 1, 1, COLUNAS_PERGUNTAS.length).setValues([COLUNAS_PERGUNTAS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  delete MEMO_ABAS_[ABA_PERGUNTAS];
+  return sh;
+}
+
+function gravarPerguntas_(linhas) {
+  if (!linhas.length) return;
+  const sh = abaPerguntas_();
+  const matriz = linhas.map(function (l) { return COLUNAS_PERGUNTAS.map(function (c) { return l[c] !== undefined && l[c] !== null ? l[c] : ''; }); });
+  sh.getRange(sh.getLastRow() + 1, 1, matriz.length, COLUNAS_PERGUNTAS.length).setValues(matriz);
+  delete MEMO_ABAS_[ABA_PERGUNTAS];
+}
+
+// Na primeira alteração de um tipo, copia a lista padrão para a aba — daí
+// em diante o tipo tem a lista própria e as mudanças valem só para ele.
+function semearPerguntasDoTipo_(modulo, tipo) {
+  abaPerguntas_();
+  if (linhasPerguntas_(modulo, tipo).length) return;
+  const padrao = perguntasPadrao_(modulo);
+  const ids = nextIds_('PRG', padrao.length);
+  gravarPerguntas_(padrao.map(function (i, n) {
+    return { ID_PERGUNTA: ids[n], MODULO: modulo, TIPO_EQUIPAMENTO: tipo, ITEM: i.item, INSTRUCAO: i.instrucao, ORDEM: n + 1, ATIVO: 'SIM' };
+  }));
+}
+
+// Acha a pergunta pelo ID ou, quando ela ainda era da lista padrão, pelo nome.
+function acharPergunta_(modulo, tipo, p) {
+  const linhas = linhasPerguntas_(modulo, tipo);
+  const id = textoLimpo_(p.idPergunta);
+  const nome = textoLimpo_(p.itemOriginal).toLowerCase();
+  return linhas.find(function (l) { return id && String(l.ID_PERGUNTA) === id; }) ||
+    linhas.find(function (l) { return nome && String(l.ITEM).toLowerCase() === nome; }) || null;
+}
+
+function atualizarPergunta_(idPergunta, updates) {
+  const sh = abaPerguntas_();
+  const valores = sh.getDataRange().getValues();
+  const cab = valores[0];
+  const colId = cab.indexOf('ID_PERGUNTA');
+  for (let i = 1; i < valores.length; i++) {
+    if (String(valores[i][colId]) === String(idPergunta)) {
+      const linha = valores[i].slice();
+      Object.keys(updates).forEach(function (k) { const c = cab.indexOf(k); if (c > -1) linha[c] = updates[k]; });
+      sh.getRange(i + 1, 1, 1, linha.length).setValues([linha]);
+      delete MEMO_ABAS_[ABA_PERGUNTAS];
+      return true;
+    }
+  }
+  return false;
+}
+
+// Cria (sem idPergunta/itemOriginal) ou altera uma pergunta.
+function salvarPergunta_(p) {
+  const modulo = moduloPerguntas_(p.modulo);
+  const tipo = textoLimpo_(p.tipo);
+  if (!tipo) throw new Error('Informe o tipo de equipamento.');
+  const item = textoLimpo_(p.item);
+  if (!item) throw new Error('Escreva a pergunta.');
+  const instrucao = textoLimpo_(p.instrucao);
+  const alterando = !!(textoLimpo_(p.idPergunta) || textoLimpo_(p.itemOriginal));
+
+  semearPerguntasDoTipo_(modulo, tipo);
+  const linhas = linhasPerguntas_(modulo, tipo);
+  const atual = alterando ? acharPergunta_(modulo, tipo, p) : null;
+  if (alterando && !atual) throw new Error('Pergunta não encontrada. Atualize a tela e tente de novo.');
+  const repetida = linhas.some(function (l) {
+    return String(l.ITEM).toLowerCase() === item.toLowerCase() && (!atual || String(l.ID_PERGUNTA) !== String(atual.ID_PERGUNTA));
+  });
+  if (repetida) throw new Error('Já existe uma pergunta com esse nome para este tipo de equipamento.');
+
+  if (atual) {
+    atualizarPergunta_(atual.ID_PERGUNTA, { ITEM: item, INSTRUCAO: instrucao });
+  } else {
+    const ordem = linhas.reduce(function (maior, l) { return Math.max(maior, Number(l.ORDEM) || 0); }, 0) + 1;
+    gravarPerguntas_([{ ID_PERGUNTA: nextId_('PRG'), MODULO: modulo, TIPO_EQUIPAMENTO: tipo, ITEM: item, INSTRUCAO: instrucao, ORDEM: ordem, ATIVO: 'SIM' }]);
+  }
+  return { ok: true, data: getPerguntas_({ modulo: modulo, tipo: tipo }) };
+}
+
+// Excluir = desativar (ATIVO = NAO): a linha fica na aba como registro, e
+// os checklists/lavagens já feitos não mudam.
+function deletarPergunta_(p) {
+  const modulo = moduloPerguntas_(p.modulo);
+  const tipo = textoLimpo_(p.tipo);
+  if (!tipo) throw new Error('Informe o tipo de equipamento.');
+  semearPerguntasDoTipo_(modulo, tipo);
+  const atual = acharPergunta_(modulo, tipo, p);
+  if (!atual) throw new Error('Pergunta não encontrada. Atualize a tela e tente de novo.');
+  if (linhasPerguntas_(modulo, tipo).length <= 1) {
+    throw new Error('O formulário precisa de pelo menos uma pergunta. Altere esta em vez de excluir.');
+  }
+  atualizarPergunta_(atual.ID_PERGUNTA, { ATIVO: 'NAO' });
+  return { ok: true, data: getPerguntas_({ modulo: modulo, tipo: tipo }) };
+}
+
+// ======================= CARREGAMENTO DE BATERIA =======================
+// [OUT/2026] Máquinas elétricas (MOTORIZACAO = eletrica) registram o
+// carregamento da bateria no lugar da troca de gás: horímetro na hora de
+// pôr para carregar, e o app calcula as horas de uso desde a carga
+// anterior. Fica na aba CARREGAMENTOS_BATERIA, criada sozinha no primeiro
+// registro. Sem fornecedor nem custo.
+const ABA_CARREGAMENTOS = 'CARREGAMENTOS_BATERIA';
+const COLUNAS_CARREGAMENTOS = ['ID_CARREGAMENTO', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL',
+  'HORIMETRO', 'HORIMETRO_ANTERIOR', 'HORAS_OPERACAO', 'DATA_HORA'];
+
+// 'eletrica' ou 'combustao' (padrão, inclusive para cadastro antigo em branco).
+function motorizacao_(valor) {
+  const v = textoLimpo_(valor).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return v.indexOf('eletric') === 0 ? 'eletrica' : 'combustao';
+}
+
+function lerCarregamentos_() {
+  if (!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ABA_CARREGAMENTOS)) return [];
+  return readSheet_(ABA_CARREGAMENTOS);
+}
+
+function getCarregamentos_(params) {
+  const janela = resolverPeriodo_(Object.assign({ periodo: params.periodo || 'todos' }, params));
+  let rows = filtrarPorUnidade_(lerCarregamentos_(), params.unidade);
+  const idEquipamento = textoLimpo_(params.idEquipamento);
+  if (idEquipamento) rows = rows.filter(function (c) { return String(c.ID_EQUIPAMENTO) === idEquipamento; });
+  rows = rows.filter(function (c) { return dentroDoPeriodo_(c.DATA_HORA, janela); });
+  return rows.sort(function (a, b) { return ordenarPorDataDesc_(a.DATA_HORA, b.DATA_HORA); });
+}
+
+function criarCarregamento_(p) {
+  const unidade = exigirUnidade_(p.unidade);
+  validarAcessoUnidade_(p.idUsuario, unidade);
+  const equipamento = equipamentoDaUnidade_(p.idEquipamento, unidade);
+  if (motorizacao_(equipamento.MOTORIZACAO) !== 'eletrica') {
+    throw new Error('Este equipamento está cadastrado como a combustão. Para ele, registre a troca de gás.');
+  }
+  const responsavel = textoLimpo_(p.responsavel);
+  if (!responsavel) throw new Error('Responsável não informado. Entre novamente no app.');
+  const horimetro = horimetroOpcional_(p.horimetro, 'Horímetro');
+  if (horimetro === '') throw new Error('Informe o horímetro da máquina.');
+
+  const anteriores = lerCarregamentos_().filter(function (c) { return String(c.ID_EQUIPAMENTO) === String(equipamento.ID_EQUIPAMENTO); })
+    .sort(function (a, b) { return ordenarPorDataDesc_(a.DATA_HORA, b.DATA_HORA); });
+  const anterior = anteriores.length ? Number(anteriores[0].HORIMETRO) : null;
+  if (anterior !== null && !isNaN(anterior) && horimetro < anterior) {
+    throw new Error('O horímetro informado (' + horimetro + ') é menor que o da última carga desta frota (' + anterior + '). Confira o valor.');
+  }
+  const horasOperacao = anterior !== null && !isNaN(anterior) ? Math.round((horimetro - anterior) * 100) / 100 : null;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(ABA_CARREGAMENTOS);
+  if (!sh) {
+    sh = ss.insertSheet(ABA_CARREGAMENTOS);
+    sh.getRange(1, 1, 1, COLUNAS_CARREGAMENTOS.length).setValues([COLUNAS_CARREGAMENTOS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  const id = nextId_('BAT');
+  const agora = nowIso_();
+  const r = {
+    ID_CARREGAMENTO: id, UNIDADE: unidade, ID_EQUIPAMENTO: equipamento.ID_EQUIPAMENTO, NOME_EQUIPAMENTO: equipamento.NOME,
+    RESPONSAVEL: responsavel, HORIMETRO: horimetro, HORIMETRO_ANTERIOR: anterior === null ? '' : anterior,
+    HORAS_OPERACAO: horasOperacao === null ? '' : horasOperacao, DATA_HORA: agora
+  };
+  sh.appendRow(COLUNAS_CARREGAMENTOS.map(function (c) { return r[c]; }));
+  delete MEMO_ABAS_[ABA_CARREGAMENTOS];
+  return { ok: true, data: { idCarregamento: id, dataHora: agora, horasOperacao: horasOperacao, horimetroAnterior: anterior } };
+}
+
+// Exclusão de carregamento lançado por engano — só Administrador. A carga
+// seguinte da mesma frota tem o horímetro anterior e as horas refeitos.
+function deletarCarregamento_(p) {
+  const id = textoLimpo_(p.idCarregamento);
+  if (!id) throw new Error('Informe o carregamento a excluir.');
+  const todos = lerCarregamentos_();
+  const atual = todos.find(function (c) { return String(c.ID_CARREGAMENTO) === id; });
+  if (!atual) throw new Error('Carregamento não encontrado.');
+  validarAcessoUnidade_(p.idUsuario, atual.UNIDADE);
+
+  const quando = parseData_(atual.DATA_HORA);
+  const outros = todos.filter(function (c) {
+    return String(c.ID_EQUIPAMENTO) === String(atual.ID_EQUIPAMENTO) && String(c.ID_CARREGAMENTO) !== id;
+  }).sort(function (a, b) { return ordenarPorDataDesc_(b.DATA_HORA, a.DATA_HORA); }); // mais antigo primeiro
+  let anterior = null, seguinte = null;
+  outros.forEach(function (c) {
+    const dt = parseData_(c.DATA_HORA);
+    if (!dt || !quando) return;
+    if (dt.getTime() < quando.getTime()) anterior = c;
+    else if (!seguinte) seguinte = c;
+  });
+
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ABA_CARREGAMENTOS);
+  const valores = sh.getDataRange().getValues();
+  const colId = valores[0].indexOf('ID_CARREGAMENTO');
+  for (let i = valores.length - 1; i >= 1; i--) {
+    if (String(valores[i][colId]) === id) { sh.deleteRow(i + 1); break; }
+  }
+  if (seguinte) {
+    const hAnt = anterior ? Number(anterior.HORIMETRO) : NaN;
+    const hSeg = Number(seguinte.HORIMETRO);
+    const temConta = !isNaN(hAnt) && !isNaN(hSeg);
+    const v2 = sh.getDataRange().getValues();
+    const cab = v2[0];
+    for (let i = 1; i < v2.length; i++) {
+      if (String(v2[i][colId]) === String(seguinte.ID_CARREGAMENTO)) {
+        sh.getRange(i + 1, cab.indexOf('HORIMETRO_ANTERIOR') + 1).setValue(temConta ? hAnt : '');
+        sh.getRange(i + 1, cab.indexOf('HORAS_OPERACAO') + 1).setValue(temConta ? Math.max(0, hSeg - hAnt) : '');
+        break;
+      }
+    }
+  }
+  delete MEMO_ABAS_[ABA_CARREGAMENTOS];
+  return { ok: true, data: { ID_CARREGAMENTO: id, removido: true } };
+}
+
+// ======================= [OUT/2026 — 15/10] ANÁLISE: PRESTADORES E CAUSA RAIZ =======================
+// Tudo em tempo corrido. Usa os chamados ABERTOS no período.
+//  • prestadores: tempo médio do acionamento até o técnico começar, duração
+//    média do serviço e do chamado inteiro, por prestador (mais rápido 1º);
+//  • causas: Pareto da causa raiz informada ao finalizar;
+//  • problemas: o que mais quebrou (título do chamado);
+//  • reincidencias: frotas com 2+ corretivas no período;
+//  • gargalo: em qual etapa o chamado mais espera;
+//  • confiabilidade: MTBF (horas rodadas entre falhas) e MTTR (tempo médio
+//    de reparo) por frota;
+//  • conclusoes: frases prontas com o que os números apontam.
+const CAUSAS_RAIZ = ['Desgaste natural', 'Falta de preventiva', 'Mau uso / operação', 'Falha elétrica', 'Falha hidráulica',
+  'Falha mecânica / peça', 'Pneu / rodas', 'Bateria / carregamento', 'Acidente / impacto', 'Outros'];
+
+function analiseManutencao_(manutencoes, horasPorMaquina) {
+  const lista = (manutencoes || []).map(function (m) { return anexarTemposManutencao_(Object.assign({}, m)); });
+  const corretivas = lista.filter(function (m) { return String(m.TIPO) !== 'preventiva'; });
+  const txt = function (ms) { return ms === null || ms === undefined ? '—' : formatarHoras_(ms); };
+  const media = function (soma, n) { return n ? Math.round(soma / n) : null; };
+  const normal = function (t) {
+    return String(t || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+  };
+
+  // ---- Prestadores ----
+  const porPrest = {};
+  lista.forEach(function (m) {
+    const nome = textoLimpo_(m.PRESTADOR);
+    if (!nome) return;
+    const k = normal(nome);
+    const p = porPrest[k] || (porPrest[k] = { nome: nome, chamados: 0, finalizados: 0, chegada: [0, 0], servico: [0, 0], total: [0, 0] });
+    p.chamados++;
+    if (String(m.STATUS) === 'concluida') p.finalizados++;
+    if (parseData_(m.INICIADA_EM) && m.TEMPO_CHEGADA_MS !== null) { p.chegada[0] += m.TEMPO_CHEGADA_MS; p.chegada[1]++; }
+    if (parseData_(m.CONCLUIDA_EM) && m.TEMPO_EXECUCAO_MS !== null) { p.servico[0] += m.TEMPO_EXECUCAO_MS; p.servico[1]++; }
+    if (parseData_(m.CONCLUIDA_EM) && m.TEMPO_TOTAL_MS !== null) { p.total[0] += m.TEMPO_TOTAL_MS; p.total[1]++; }
+  });
+  const prestadores = Object.keys(porPrest).map(function (k) {
+    const p = porPrest[k];
+    const ch = media(p.chegada[0], p.chegada[1]), sv = media(p.servico[0], p.servico[1]), tt = media(p.total[0], p.total[1]);
+    return { nome: p.nome, chamados: p.chamados, finalizados: p.finalizados,
+      chegadaMs: ch, chegadaTexto: txt(ch), servicoMs: sv, servicoTexto: txt(sv), totalMs: tt, totalTexto: txt(tt) };
+  }).sort(function (a, b) {
+    if (a.chegadaMs === null) return 1;
+    if (b.chegadaMs === null) return -1;
+    return a.chegadaMs - b.chegadaMs;
+  });
+  const semPrestador = lista.filter(function (m) { return parseData_(m.ACIONADO_EM) && !textoLimpo_(m.PRESTADOR); }).length;
+
+  // ---- Causa raiz (Pareto) ----
+  const porCausa = {};
+  let comCausa = 0;
+  corretivas.forEach(function (m) {
+    const c = textoLimpo_(m.CAUSA_RAIZ);
+    if (!c) return;
+    comCausa++;
+    const x = porCausa[c] || (porCausa[c] = { causa: c, chamados: 0, tempoMs: 0 });
+    x.chamados++;
+    x.tempoMs += Number(m.TEMPO_TOTAL_MS) || 0;
+  });
+  let acum = 0;
+  const causas = Object.keys(porCausa).map(function (k) { return porCausa[k]; })
+    .sort(function (a, b) { return b.chamados - a.chamados || b.tempoMs - a.tempoMs; })
+    .map(function (x) {
+      acum += x.chamados;
+      return { causa: x.causa, chamados: x.chamados, pct: pct_(x.chamados, comCausa), pctAcumulado: pct_(acum, comCausa),
+        tempoMs: x.tempoMs, tempoTexto: txt(x.tempoMs) };
+    });
+  const finalizadasSemCausa = corretivas.filter(function (m) { return String(m.STATUS) === 'concluida' && !textoLimpo_(m.CAUSA_RAIZ); }).length;
+
+  // ---- O que mais quebrou (título do chamado) ----
+  const porProblema = {};
+  corretivas.forEach(function (m) {
+    const k = normal(m.TITULO);
+    if (!k) return;
+    const x = porProblema[k] || (porProblema[k] = { problema: textoLimpo_(m.TITULO), chamados: 0, tempoMs: 0, frotas: {} });
+    x.chamados++;
+    x.tempoMs += Number(m.TEMPO_TOTAL_MS) || 0;
+    x.frotas[String(m.NOME_EQUIPAMENTO || m.ID_EQUIPAMENTO)] = true;
+  });
+  const problemas = Object.keys(porProblema).map(function (k) {
+    const x = porProblema[k];
+    return { problema: x.problema, chamados: x.chamados, tempoMs: x.tempoMs, tempoTexto: txt(x.tempoMs), frotas: Object.keys(x.frotas) };
+  }).sort(function (a, b) { return b.chamados - a.chamados || b.tempoMs - a.tempoMs; }).slice(0, 10);
+
+  // ---- Falhas por categoria (lista escolhida na abertura) ----
+  const porCategoria = {};
+  corretivas.forEach(function (m) {
+    const c = textoLimpo_(m.CATEGORIA);
+    if (!c) return;
+    const x = porCategoria[c] || (porCategoria[c] = { categoria: c, chamados: 0, tempoMs: 0, subs: {} });
+    x.chamados++;
+    x.tempoMs += Number(m.TEMPO_TOTAL_MS) || 0;
+    const sc = textoLimpo_(m.SUBCATEGORIA);
+    if (sc) x.subs[sc] = (x.subs[sc] || 0) + 1;
+  });
+  const totalCat = Object.keys(porCategoria).reduce(function (t, k) { return t + porCategoria[k].chamados; }, 0);
+  const categorias = Object.keys(porCategoria).map(function (k) {
+    const x = porCategoria[k];
+    const subs = Object.keys(x.subs).sort(function (a, b) { return x.subs[b] - x.subs[a]; })
+      .map(function (n) { return n + ' (' + x.subs[n] + ')'; });
+    return { categoria: x.categoria, chamados: x.chamados, pct: pct_(x.chamados, totalCat), tempoMs: x.tempoMs, tempoTexto: txt(x.tempoMs),
+      subcategorias: subs.join(', ') };
+  }).sort(function (a, b) { return b.chamados - a.chamados || b.tempoMs - a.tempoMs; });
+
+  // ---- Reincidência por frota ----
+  const porFrota = {};
+  corretivas.forEach(function (m) {
+    const k = String(m.ID_EQUIPAMENTO);
+    const x = porFrota[k] || (porFrota[k] = { idEquipamento: k, frota: m.NOME_EQUIPAMENTO, unidade: m.UNIDADE, corretivas: 0, tempoMs: 0, titulos: {}, causas: {} });
+    x.corretivas++;
+    x.tempoMs += Number(m.TEMPO_TOTAL_MS) || 0;
+    const t = normal(m.TITULO);
+    if (t) x.titulos[t] = (x.titulos[t] || { nome: textoLimpo_(m.TITULO), n: 0 }), x.titulos[t].n++;
+    const c = textoLimpo_(m.CAUSA_RAIZ);
+    if (c) x.causas[c] = (x.causas[c] || 0) + 1;
+  });
+  const reincidencias = Object.keys(porFrota).map(function (k) { return porFrota[k]; })
+    .filter(function (x) { return x.corretivas >= 2; })
+    .map(function (x) {
+      const repetidos = Object.keys(x.titulos).map(function (t) { return x.titulos[t]; }).filter(function (t) { return t.n >= 2; });
+      const causaTop = Object.keys(x.causas).sort(function (a, b) { return x.causas[b] - x.causas[a]; })[0] || '';
+      return { idEquipamento: x.idEquipamento, frota: x.frota, unidade: x.unidade, corretivas: x.corretivas,
+        tempoMs: x.tempoMs, tempoTexto: txt(x.tempoMs),
+        mesmoProblema: repetidos.map(function (t) { return t.nome + ' (' + t.n + 'x)'; }).join(', '),
+        causaPrincipal: causaTop };
+    })
+    .sort(function (a, b) { return b.corretivas - a.corretivas || (b.mesmoProblema ? 1 : 0) - (a.mesmoProblema ? 1 : 0) || b.tempoMs - a.tempoMs; });
+
+  // ---- Gargalo: onde o chamado espera mais ----
+  const tm = temposMediosManutencao_(manutencoes || []);
+  const etapas = [
+    { etapa: 'Abertura → técnico acionado', ms: tm.acionamentoMs },
+    { etapa: 'Técnico acionado → início', ms: tm.chegadaMs },
+    { etapa: 'Início → fim (serviço)', ms: tm.execucaoMs }
+  ].filter(function (e) { return e.ms !== null; });
+  const somaEtapas = etapas.reduce(function (t, e) { return t + e.ms; }, 0);
+  etapas.forEach(function (e) { e.texto = txt(e.ms); e.pct = pct_(e.ms, somaEtapas); });
+  const maiorEtapa = etapas.slice().sort(function (a, b) { return b.ms - a.ms; })[0] || null;
+
+  // ---- Confiabilidade por frota: MTBF e MTTR ----
+  const horasMap = {};
+  (horasPorMaquina || []).forEach(function (h) { horasMap[String(h.idEquipamento)] = h; });
+  const confiabilidade = Object.keys(porFrota).map(function (k) {
+    const x = porFrota[k];
+    const concl = corretivas.filter(function (m) { return String(m.ID_EQUIPAMENTO) === k && parseData_(m.CONCLUIDA_EM); });
+    const mttr = media(concl.reduce(function (t, m) { return t + (Number(m.TEMPO_TOTAL_MS) || 0); }, 0), concl.length);
+    const h = horasMap[k];
+    const horasOp = h && h.operacaoHoras !== null && h.operacaoHoras !== undefined ? h.operacaoHoras : null;
+    const mtbf = horasOp !== null && x.corretivas ? Math.round(horasOp / x.corretivas * 10) / 10 : null;
+    return { idEquipamento: k, frota: x.frota, unidade: x.unidade, falhas: x.corretivas,
+      horasOperacao: horasOp, mtbfHoras: mtbf, mtbfTexto: mtbf === null ? '—' : formatarHoras_(mtbf * 3600000),
+      mttrMs: mttr, mttrTexto: txt(mttr) };
+  }).sort(function (a, b) { return b.falhas - a.falhas || (b.mttrMs || 0) - (a.mttrMs || 0); });
+
+  // ---- Origem dos chamados ----
+  const deNc = corretivas.filter(function (m) { return /origem: n[aã]o conformidade/i.test(String(m.DESCRICAO || '')); }).length;
+  const origem = { corretivas: corretivas.length, preventivas: lista.length - corretivas.length, vindasDeChecklist: deNc, abertasDireto: corretivas.length - deNc };
+
+  // ---- Conclusões automáticas ----
+  const conclusoes = [];
+  if (causas.length) {
+    const top = causas[0];
+    conclusoes.push('A principal causa raiz foi "' + top.causa + '": ' + top.chamados + ' de ' + comCausa + ' corretiva(s) (' + String(top.pct).replace('.', ',') + '%).');
+    const pareto = causas.filter(function (c, i) { return i === 0 || causas[i - 1].pctAcumulado < 80; });
+    if (pareto.length > 1 && pareto.length < causas.length) {
+      conclusoes.push(pareto.length + ' causas explicam ' + String(pareto[pareto.length - 1].pctAcumulado).replace('.', ',') + '% das falhas: ' +
+        pareto.map(function (c) { return c.causa; }).join(', ') + '. Atacar essas primeiro.');
+    }
+    if (porCausa['Falta de preventiva']) conclusoes.push(porCausa['Falta de preventiva'].chamados + ' falha(s) por falta de preventiva: reforçar o plano de preventivas.');
+    if (porCausa['Mau uso / operação']) conclusoes.push(porCausa['Mau uso / operação'].chamados + ' falha(s) por mau uso: avaliar treinamento dos operadores.');
+  }
+  if (reincidencias.length) {
+    const r0 = reincidencias[0];
+    conclusoes.push(r0.frota + ' teve ' + r0.corretivas + ' corretivas no período' + (r0.mesmoProblema ? ', com problema repetido: ' + r0.mesmoProblema : '') +
+      '. Reincidência indica que a causa não foi resolvida no primeiro reparo.');
+  }
+  if (categorias.length) {
+    conclusoes.push('A categoria com mais falhas foi "' + categorias[0].categoria + '": ' + categorias[0].chamados + ' chamado(s)' +
+      (categorias[0].subcategorias ? ', principalmente ' + categorias[0].subcategorias.split(', ').slice(0, 2).join(' e ') : '') + '.');
+  }
+  if (problemas.length && problemas[0].chamados >= 2) {
+    conclusoes.push('O problema mais frequente foi "' + problemas[0].problema + '" (' + problemas[0].chamados + ' chamados, ' + problemas[0].frotas.length + ' frota(s)).');
+  }
+  if (maiorEtapa && etapas.length > 1) {
+    conclusoes.push('O gargalo do atendimento é a etapa "' + maiorEtapa.etapa + '": média de ' + maiorEtapa.texto + ' (' + String(maiorEtapa.pct).replace('.', ',') + '% do tempo).');
+  }
+  if (prestadores.length > 1 && prestadores[0].chegadaMs !== null) {
+    const ultimo = prestadores.filter(function (p) { return p.chegadaMs !== null; }).slice(-1)[0];
+    if (ultimo && ultimo.nome !== prestadores[0].nome) {
+      conclusoes.push(prestadores[0].nome + ' é o prestador mais rápido para começar (' + prestadores[0].chegadaTexto + ' em média); ' +
+        ultimo.nome + ' é o mais lento (' + ultimo.chegadaTexto + ').');
+    }
+  }
+  if (finalizadasSemCausa) conclusoes.push(finalizadasSemCausa + ' corretiva(s) finalizada(s) sem causa raiz informada: preencher para a análise ficar completa.');
+  if (semPrestador) conclusoes.push(semPrestador + ' chamado(s) com técnico acionado sem prestador informado.');
+
+  return {
+    prestadores: prestadores, semPrestador: semPrestador,
+    causas: causas, comCausa: comCausa, finalizadasSemCausa: finalizadasSemCausa,
+    problemas: problemas, reincidencias: reincidencias, categorias: categorias,
+    gargalo: { etapas: etapas, maior: maiorEtapa },
+    confiabilidade: confiabilidade, origem: origem,
+    conclusoes: conclusoes
+  };
+}
+
+// Dois slides prontos (prestadores; causa raiz) para os PDFs.
+function slidesAnaliseManutencao_(pres, a) {
+  if (!a) return;
+  const PW = pres.getPageWidth(), PH = pres.getPageHeight();
+  const GRAY = '#6b7280', VERMELHO = '#D64545', VERDE = '#2F9E64';
+  const curto = function (t, n) { t = String(t || ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  try {
+    const s = slideNovo_(pres);
+    slideTitulo_(s, 'Prestadores de serviço · quem atende mais rápido', 30, {});
+    slideTexto_(s, 'Tempo corrido. "Até começar" = do acionamento do técnico até o início do serviço. Ordenado do mais rápido para o mais lento.',
+      66, { size: 10, color: GRAY, width: PW - 80, height: 24 });
+    if (a.prestadores.length) {
+      const ls = a.prestadores.slice(0, 9);
+      slideTabela_(s, [['Prestador', 'Chamados', 'Até começar', 'Duração do serviço', 'Chamado inteiro']].concat(ls.map(function (p) {
+        return [curto(p.nome, 30), p.chamados, p.chegadaTexto, p.servicoTexto, p.totalTexto];
+      })), 96, { width: PW - 80, height: (ls.length + 1) * 26, fontSize: 9,
+        corColuna: { 2: function (l, i) { return i === 1 ? VERDE : (i === ls.length && ls.length > 1 ? VERMELHO : null); } } });
+    } else {
+      slideTexto_(s, 'Nenhum chamado com prestador informado no período. O prestador é informado ao acionar o técnico.', 110, { size: 12, width: PW - 80 });
+    }
+  } catch (e) { /* segue */ }
+  try {
+    const s = slideNovo_(pres);
+    slideTitulo_(s, 'Causa raiz das falhas', 30, {});
+    let top = 70;
+    if (a.causas.length) {
+      const ls = a.causas.slice(0, 6);
+      slideTabela_(s, [['Causa raiz', 'Falhas', '%', '% acumulado', 'Tempo parado']].concat(ls.map(function (c) {
+        return [c.causa, c.chamados, String(c.pct).replace('.', ',') + '%', String(c.pctAcumulado).replace('.', ',') + '%', c.tempoTexto];
+      })), top, { width: PW - 80, height: (ls.length + 1) * 22, fontSize: 9 });
+      top += (ls.length + 1) * 22 + 12;
+    } else {
+      slideTexto_(s, 'Ainda sem causa raiz informada nos chamados finalizados do período.', top, { size: 11, width: PW - 80, height: 24 });
+      top += 30;
+    }
+    const concl = (a.conclusoes || []).slice(0, 5);
+    if (concl.length) {
+      slideTexto_(s, concl.map(function (c) { return '• ' + c; }).join('\n'), top, { size: 10, width: PW - 80, height: Math.max(60, PH - top - 30) });
+    }
+  } catch (e) { /* segue */ }
+}
+
+// ======================= [OUT/2026 — 15/10] PRESTADORES DE SERVIÇO =======================
+// Comparativo entre as empresas que atendem os chamados, no período:
+//  • acionamento → início, início → fim e acionamento → fim (médias);
+//  • quantas manutenções;
+//  • recorrência: a empresa fez o serviço e o MESMO defeito voltou na
+//    MESMA máquina — a recorrência fica com quem mexeu por último antes de
+//    voltar, mesmo que a volta seja atendida por outra empresa;
+//  • classificação por posição entre as empresas (ver classificarPrestadores_).
+// Tempo corrido. Usa os chamados com prestador ABERTOS no período.
+
+function chaveDefeito_(m) {
+  const base = textoLimpo_(m.CATEGORIA) ? textoLimpo_(m.CATEGORIA) + '|' + textoLimpo_(m.SUBCATEGORIA) : textoLimpo_(m.TITULO);
+  return String(base || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function getPrestadores_(params) {
+  const janela = resolverPeriodo_(params);
+  const todas = filtrarPorUnidade_(readSheet_(SHEETS.MANUTENCOES), params.unidade);
+  const doPeriodo = todas.filter(function (m) { return textoLimpo_(m.PRESTADOR) && dentroDoPeriodo_(m.ABERTA_EM, janela); })
+    .map(function (m) { return anexarTemposManutencao_(Object.assign({}, m)); });
+  const corretivasPorEquip = {};
+  todas.forEach(function (m) {
+    if (String(m.TIPO) === 'preventiva') return;
+    (corretivasPorEquip[String(m.ID_EQUIPAMENTO)] = corretivasPorEquip[String(m.ID_EQUIPAMENTO)] || []).push(m);
+  });
+  const txt = function (ms) { return ms === null || ms === undefined ? '—' : formatarHoras_(ms); };
+  const media = function (par) { return par[1] ? Math.round(par[0] / par[1]) : null; };
+
+  const por = {};
+  doPeriodo.forEach(function (m) {
+    const nome = textoLimpo_(m.PRESTADOR);
+    const k = nome.toLowerCase();
+    const p = por[k] || (por[k] = { nome: nome, chamados: 0, finalizados: 0, emAberto: 0, unidades: {},
+      chegada: [0, 0], servico: [0, 0], acionFim: [0, 0], recorrentes: [], frotas: {} });
+    p.chamados++;
+    p.unidades[m.UNIDADE] = true;
+    p.frotas[m.NOME_EQUIPAMENTO] = true;
+    const ac = parseData_(m.ACIONADO_EM), ini = parseData_(m.INICIADA_EM), fim = parseData_(m.CONCLUIDA_EM);
+    if (String(m.STATUS) === 'concluida') p.finalizados++; else p.emAberto++;
+    if (ac && ini && m.TEMPO_CHEGADA_MS !== null) { p.chegada[0] += m.TEMPO_CHEGADA_MS; p.chegada[1]++; }
+    if (ini && fim && m.TEMPO_EXECUCAO_MS !== null) { p.servico[0] += m.TEMPO_EXECUCAO_MS; p.servico[1]++; }
+    if (ac && fim && fim > ac) { p.acionFim[0] += fim.getTime() - ac.getTime(); p.acionFim[1]++; }
+    // Recorrência: o mesmo defeito voltou na mesma máquina depois deste
+    // serviço (o próximo chamado dele). Cai sobre esta empresa, que foi a
+    // última a mexer, qualquer que seja a empresa que atende a volta.
+    if (fim && String(m.TIPO) !== 'preventiva') {
+      const chave = chaveDefeito_(m);
+      const voltou = (corretivasPorEquip[String(m.ID_EQUIPAMENTO)] || []).filter(function (o) {
+        if (String(o.ID_MANUTENCAO) === String(m.ID_MANUTENCAO)) return false;
+        const ab = parseData_(o.ABERTA_EM);
+        return ab && ab.getTime() > fim.getTime() && chaveDefeito_(o) === chave;
+      }).sort(function (a, b) { return parseData_(a.ABERTA_EM) - parseData_(b.ABERTA_EM); })[0];
+      if (voltou) {
+        p.recorrentes.push({ idManutencao: m.ID_MANUTENCAO, frota: m.NOME_EQUIPAMENTO, problema: m.TITULO,
+          finalizadaEm: m.CONCLUIDA_EM, voltouEm: voltou.ABERTA_EM, idVoltou: voltou.ID_MANUTENCAO,
+          atendidoPor: textoLimpo_(voltou.PRESTADOR) || 'ainda sem prestador',
+          diasDepois: Math.max(0, Math.round((parseData_(voltou.ABERTA_EM).getTime() - fim.getTime()) / 86400000)) });
+      }
+    }
+  });
+
+  let lista = Object.keys(por).map(function (k) {
+    const p = por[k];
+    const ch = media(p.chegada), sv = media(p.servico), af = media(p.acionFim);
+    const rec = p.recorrentes.length;
+    return {
+      nome: p.nome, unidades: Object.keys(p.unidades), frotas: Object.keys(p.frotas),
+      chamados: p.chamados, finalizados: p.finalizados, emAberto: p.emAberto,
+      acionInicioMs: ch, acionInicioTexto: txt(ch),
+      inicioFimMs: sv, inicioFimTexto: txt(sv),
+      acionFimMs: af, acionFimTexto: txt(af),
+      recorrencias: rec, semRecorrencia: Math.max(0, p.finalizados - rec),
+      taxaRecorrenciaPct: p.finalizados ? pct_(rec, p.finalizados) : null,
+      recorrentes: p.recorrentes
+    };
+  });
+
+  // Média geral (ponderada pelos chamados) do acionamento até o fim.
+  const comTempo = lista.filter(function (p) { return p.acionFimMs !== null; });
+  const somaPeso = comTempo.reduce(function (t, p) { return t + p.finalizados; }, 0);
+  const mediaGeralMs = somaPeso ? Math.round(comTempo.reduce(function (t, p) { return t + p.acionFimMs * p.finalizados; }, 0) / somaPeso) : null;
+  lista = classificarPrestadores_(lista);
+  const plano = planoPrestadores_(lista);
+
+  return {
+    periodo: janela.label || '',
+    unidade: params.unidade,
+    mediaGeralAcionFimMs: mediaGeralMs, mediaGeralAcionFimTexto: txt(mediaGeralMs),
+    resumo: {
+      bom: lista.filter(function (p) { return p.classe === 'bom'; }).length,
+      mediano: lista.filter(function (p) { return p.classe === 'mediano'; }).length,
+      ruim: lista.filter(function (p) { return p.classe === 'ruim'; }).length,
+      semDados: lista.filter(function (p) { return p.classe === 'sem_dados'; }).length
+    },
+    prestadores: lista,
+    plano: plano
+  };
+}
+
+// Classificação POR POSIÇÃO entre as empresas: cada uma ganha um lugar no
+// ranking de tempo (acionamento → fim, menor é melhor) e outro no de
+// recorrência (% de serviços em que o defeito voltou, menor é melhor). A
+// soma dos dois lugares dá a posição final (empate: menor tempo).
+// 1º = Bom, último = Ruim, o meio = Mediano. Com 4 ou mais empresas, o
+// terço de cima é Bom e o de baixo é Ruim.
+function classificarPrestadores_(lista) {
+  const comDados = lista.filter(function (p) { return p.finalizados && p.acionFimMs !== null; });
+  const semDados = lista.filter(function (p) { return !(p.finalizados && p.acionFimMs !== null); });
+  const lugar = function (arr, campo) {
+    const ord = arr.slice().sort(function (a, b) { return a[campo] - b[campo]; });
+    const pos = {};
+    ord.forEach(function (p, i) {
+      // empate divide o mesmo lugar
+      pos[p.nome] = i > 0 && ord[i - 1][campo] === p[campo] ? pos[ord[i - 1].nome] : i + 1;
+    });
+    return pos;
+  };
+  comDados.forEach(function (p) { p._rec = p.taxaRecorrenciaPct || 0; });
+  const lt = lugar(comDados, 'acionFimMs'), lr = lugar(comDados, '_rec');
+  comDados.forEach(function (p) { p.lugarTempo = lt[p.nome]; p.lugarRecorrencia = lr[p.nome]; p.pontos = lt[p.nome] + lr[p.nome]; delete p._rec; });
+  comDados.sort(function (a, b) { return a.pontos - b.pontos || a.acionFimMs - b.acionFimMs; });
+  const n = comDados.length;
+  comDados.forEach(function (p, i) {
+    const f = n === 1 ? 0 : i / (n - 1);
+    p.posicao = i + 1;
+    p.classe = f < 1 / 3 - 1e-9 ? 'bom' : f > 2 / 3 + 1e-9 ? 'ruim' : 'mediano';
+    if (n === 2) p.classe = i === 0 ? 'bom' : 'ruim';
+    p.classeTexto = { bom: 'Bom', mediano: 'Mediano', ruim: 'Ruim' }[p.classe];
+    const rec = p.recorrencias ? p.recorrencias + ' recorrência(s) (' + String(p.taxaRecorrenciaPct).replace('.', ',') + '%)' : 'sem recorrência';
+    p.motivo = p.posicao + 'º de ' + n + ': ' + p.lugarTempo + 'º em tempo (' + p.acionFimTexto + ' do acionamento ao fim), ' +
+      p.lugarRecorrencia + 'º em recorrência (' + rec + ').';
+  });
+  semDados.forEach(function (p) {
+    p.classe = 'sem_dados'; p.classeTexto = 'Sem dados'; p.posicao = null;
+    p.motivo = 'Ainda sem chamado finalizado no período para comparar.';
+  });
+  return comDados.concat(semDados);
+}
+
+// Plano de ação montado a partir dos números.
+function planoPrestadores_(lista) {
+  const plano = [];
+  lista.forEach(function (p) {
+    p.recorrentes.forEach(function (r) {
+      plano.push({ prioridade: 'Alta', empresa: p.nome,
+        acao: 'Cobrar garantia/retrabalho da ' + p.nome + ': ' + r.frota + ' · ' + r.problema + ' voltou ' + r.diasDepois +
+          ' dia(s) depois do serviço dela (' + r.idManutencao + ' → ' + r.idVoltou + ', atendido por ' + r.atendidoPor + ').' });
+    });
+  });
+  const comDados = lista.filter(function (p) { return p.classe !== 'sem_dados'; });
+  if (comDados.length > 1) {
+    const melhor = comDados[0], pior = comDados[comDados.length - 1];
+    plano.push({ prioridade: 'Média', empresa: melhor.nome,
+      acao: 'Priorizar a ' + melhor.nome + ' nos próximos acionamentos (melhor colocada: ' + melhor.acionFimTexto + ' do acionamento ao fim).' });
+    plano.push({ prioridade: 'Alta', empresa: pior.nome,
+      acao: 'Reunião de desempenho com a ' + pior.nome + ' (pior colocada): definir prazo de atendimento e garantia do serviço; ' +
+        'se não melhorar no próximo período, avaliar substituição.' });
+  }
+  lista.filter(function (p) { return p.emAberto; }).forEach(function (p) {
+    plano.push({ prioridade: 'Média', empresa: p.nome, acao: 'Acompanhar ' + p.emAberto + ' chamado(s) em aberto com a ' + p.nome + '.' });
+  });
+  return plano;
+}
+
+function gerarPrestadoresPDF_(p) {
+  const d = getPrestadores_(p);
+  const unidadeLabel = (ehTodasUnidades_(p.unidade) ? 'Todas as unidades' : (p.unidade || '-')) +
+    (SETOR_PEDIDO_ ? ' · ' + rotuloSetor_(SETOR_PEDIDO_) : '');
+  const doc = DocumentApp.create('tmp_prestadores_' + new Date().getTime());
+  const body = doc.getBody();
+  body.setPageWidth(842).setPageHeight(595).setMarginTop(30).setMarginBottom(30).setMarginLeft(36).setMarginRight(36);
+  const cores = { bom: '#2F9E64', mediano: '#DF8630', ruim: '#D64545', sem_dados: '#6b7280' };
+  try {
+    const logo = body.appendImage(Utilities.newBlob(Utilities.base64Decode(LOGO_ICC_BASE64), 'image/png', 'logo.png'));
+    logo.setWidth(40).setHeight(40);
+  } catch (e) { /* segue sem logo */ }
+  body.appendParagraph('Comparativo de prestadores de serviço').setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  body.appendParagraph(unidadeLabel + ' · ' + d.periodo).editAsText().setFontSize(10).setForegroundColor('#6b7280');
+  body.appendParagraph('Resultado: ' + d.resumo.bom + ' bom · ' + d.resumo.mediano + ' mediano · ' + d.resumo.ruim + ' ruim' +
+    (d.resumo.semDados ? ' · ' + d.resumo.semDados + ' sem dados' : '') + '. Média geral do acionamento até o fim: ' + d.mediaGeralAcionFimTexto + '.')
+    .editAsText().setFontSize(11).setBold(true);
+
+  if (!d.prestadores.length) {
+    body.appendParagraph('Nenhum chamado com prestador informado no período.');
+  } else {
+    const cab = ['Posição / empresa', 'Classificação', 'Manutenções', 'Acionamento → início', 'Início → fim', 'Acionamento → fim', 'Recorrências', 'Sem recorrência'];
+    const linhas = [cab].concat(d.prestadores.map(function (x) {
+      return [(x.posicao ? x.posicao + 'º ' : '') + x.nome, x.classeTexto, String(x.chamados), x.acionInicioTexto, x.inicioFimTexto, x.acionFimTexto,
+        x.recorrencias + (x.taxaRecorrenciaPct !== null ? ' (' + String(x.taxaRecorrenciaPct).replace('.', ',') + '%)' : ''), String(x.semRecorrencia)];
+    }));
+    const t = body.appendTable(linhas);
+    for (let r = 0; r < t.getNumRows(); r++) {
+      for (let c = 0; c < t.getRow(r).getNumCells(); c++) {
+        const cell = t.getRow(r).getCell(c);
+        cell.editAsText().setFontSize(9);
+        if (r === 0) { cell.setBackgroundColor('#436722'); cell.editAsText().setBold(true).setForegroundColor('#ffffff'); }
+      }
+      if (r > 0) t.getRow(r).getCell(1).editAsText().setBold(true).setForegroundColor(cores[d.prestadores[r - 1].classe]);
+    }
+    body.appendParagraph('Critério: cada empresa é colocada em ordem pelo tempo do acionamento até o fim (menor é melhor) e pela recorrência ' +
+      '(menor é melhor); a soma das duas posições dá a classificação: a melhor é Bom, a do meio é Mediano e a pior é Ruim. ' +
+      'Recorrência = o mesmo defeito voltou na mesma máquina depois do serviço; ela conta para a empresa que mexeu por último, ' +
+      'mesmo que a volta seja atendida por outra. Tempo corrido (24h, todos os dias).').editAsText().setFontSize(8).setForegroundColor('#6b7280');
+    if (d.plano.length) {
+      body.appendParagraph('Plano de ação').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+      const tp = body.appendTable([['Prioridade', 'Empresa', 'Ação']].concat(d.plano.map(function (a) { return [a.prioridade, a.empresa, a.acao]; })));
+      for (let r = 0; r < tp.getNumRows(); r++) {
+        for (let c = 0; c < 3; c++) tp.getRow(r).getCell(c).editAsText().setFontSize(9);
+        if (r === 0) for (let c = 0; c < 3; c++) { tp.getRow(r).getCell(c).setBackgroundColor('#436722'); tp.getRow(r).getCell(c).editAsText().setBold(true).setForegroundColor('#ffffff'); }
+        else if (d.plano[r - 1].prioridade === 'Alta') tp.getRow(r).getCell(0).editAsText().setBold(true).setForegroundColor('#D64545');
+      }
+    }
+
+    d.prestadores.forEach(function (x) {
+      body.appendParagraph(x.nome + ' — ' + x.classeTexto).setHeading(DocumentApp.ParagraphHeading.HEADING2)
+        .editAsText().setForegroundColor(cores[x.classe]);
+      body.appendParagraph(x.motivo).editAsText().setFontSize(9).setForegroundColor('#6b7280');
+      const det = body.appendTable([
+        ['Entre o acionamento e o início da manutenção (média)', x.acionInicioTexto],
+        ['Do início ao fim da manutenção (média)', x.inicioFimTexto],
+        ['Entre o acionamento e o fim (média)', x.acionFimTexto],
+        ['Quantas manutenções', x.chamados + ' (' + x.finalizados + ' finalizada(s), ' + x.emAberto + ' em aberto)'],
+        ['Mesmo defeito recorrente com a empresa', x.recorrencias + (x.taxaRecorrenciaPct !== null ? ' (' + String(x.taxaRecorrenciaPct).replace('.', ',') + '%)' : '')],
+        ['Manutenções realizadas sem recorrência', String(x.semRecorrencia)],
+        ['Frotas atendidas', x.frotas.join(', ')]
+      ]);
+      for (let r = 0; r < det.getNumRows(); r++) {
+        det.getRow(r).getCell(0).editAsText().setFontSize(9).setBold(true);
+        det.getRow(r).getCell(1).editAsText().setFontSize(9);
+        det.getRow(r).getCell(0).setWidth(320);
+      }
+      if (x.recorrentes.length) {
+        body.appendParagraph('Recorrências:').editAsText().setFontSize(9).setBold(true);
+        x.recorrentes.forEach(function (rr) {
+          body.appendListItem(rr.frota + ' · ' + rr.problema + ' — finalizada em ' + formatarDataHoraBr_(rr.finalizadaEm) +
+            ', voltou ' + rr.diasDepois + ' dia(s) depois (' + rr.idVoltou + ', atendido por ' + rr.atendidoPor + ')').editAsText().setFontSize(9);
+        });
+      }
+    });
+  }
+  body.appendParagraph('Gerado em ' + formatarDataHoraBr_(nowIso_())).editAsText().setFontSize(8).setForegroundColor('#6b7280');
+  doc.saveAndClose();
+  const arquivo = DriveApp.getFileById(doc.getId());
+  const pdf = arquivo.getAs('application/pdf');
+  const nome = 'comparativo_prestadores_' + String(unidadeLabel).replace(/[^\w\u00C0-\u00fa]+/g, '_') + '.pdf';
+  pdf.setName(nome);
+  const base64 = Utilities.base64Encode(pdf.getBytes());
+  try { arquivo.setTrashed(true); } catch (e) { /* segue */ }
+  return { base64: base64, filename: nome };
+}
+
+// ======================= PDF DA MANUTENÇÃO (para o técnico) =======================
+// [OUT/2026] Uma página com os dados do chamado, a descrição e as fotos,
+// para o administrador mandar ao prestador de serviço na hora de acionar.
+function idArquivoDrive_(url) {
+  const t = String(url || '');
+  const m = t.match(/[?&]id=([\w-]+)/) || t.match(/\/d\/([\w-]+)/);
+  return m ? m[1] : '';
+}
+
+function gerarManutencaoPDF_(p) {
+  const id = textoLimpo_(p.idManutencao);
+  if (!id) throw new Error('Informe a manutenção.');
+  const m = findRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', id);
+  if (!m) throw new Error('Manutenção não encontrada.');
+  validarAcessoUnidade_(p.idUsuario, m.UNIDADE);
+  const equip = findRowById_(SHEETS.EQUIPAMENTOS, 'ID_EQUIPAMENTO', m.ID_EQUIPAMENTO) || {};
+  const rotStatus = { aberta: 'Aberta', acionado: 'Técnico acionado', andamento: 'Em andamento', concluida: 'Finalizada' };
+  const rotPrio = { alta: 'Alta', media: 'Média', baixa: 'Baixa' };
+  const vazio = function (v) { return v === '' || v === null || v === undefined; };
+
+  const doc = DocumentApp.create('tmp_manutencao_' + id + '_' + new Date().getTime());
+  const body = doc.getBody();
+  body.setMarginTop(36).setMarginBottom(36).setMarginLeft(42).setMarginRight(42);
+  try {
+    const logo = body.appendImage(Utilities.newBlob(Utilities.base64Decode(LOGO_ICC_BASE64), 'image/png', 'logo.png'));
+    logo.setWidth(48).setHeight(48);
+  } catch (e) { /* segue sem a logo */ }
+  body.appendParagraph('ICC Brazil · Central de Frota').editAsText().setFontSize(10).setForegroundColor('#6b7280');
+  body.appendParagraph('Ordem de manutenção ' + id).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  body.appendParagraph(String(m.TITULO || '')).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+
+  const linhas = [
+    ['Frota', String(m.NOME_EQUIPAMENTO || '') + (equip.CODIGO ? ' (' + equip.CODIGO + ')' : '')],
+    ['Categoria do problema', vazio(m.CATEGORIA) ? '—' : String(m.CATEGORIA)],
+    ['Subcategoria', vazio(m.SUBCATEGORIA) ? '—' : String(m.SUBCATEGORIA)],
+    ['Aberto por (operador)', vazio(m.ABERTO_POR) ? '—' : String(m.ABERTO_POR)],
+    ['Tipo de equipamento', String(equip.TIPO || '—')],
+    ['Unidade', String(m.UNIDADE || '')],
+    ['Tipo / prioridade', (String(m.TIPO) === 'preventiva' ? 'Preventiva' : 'Corretiva') + ' · ' + (rotPrio[String(m.PRIORIDADE)] || String(m.PRIORIDADE || '—'))],
+    ['Status', rotStatus[String(m.STATUS)] || String(m.STATUS || '')],
+    ['Chamado aberto em', formatarDataHoraBr_(m.ABERTA_EM)],
+    ['Técnico acionado em', vazio(m.ACIONADO_EM) ? '—' : formatarDataHoraBr_(m.ACIONADO_EM)],
+    ['Prestador de serviço', vazio(m.PRESTADOR) ? '—' : String(m.PRESTADOR)],
+    ['Horímetro na abertura', vazio(m.HORIMETRO) ? '—' : String(m.HORIMETRO)]
+  ];
+  const tabela = body.appendTable(linhas);
+  for (let i = 0; i < tabela.getNumRows(); i++) {
+    tabela.getRow(i).getCell(0).editAsText().setBold(true);
+    tabela.getRow(i).getCell(0).setWidth(150);
+  }
+
+  body.appendParagraph('Descrição do problema').setHeading(DocumentApp.ParagraphHeading.HEADING3);
+  body.appendParagraph(String(m.DESCRICAO || 'Sem descrição.'));
+
+  const fotos = String(m.FOTOS || '').split(FOTO_SEP).filter(function (u) { return !!u; });
+  if (fotos.length) {
+    body.appendParagraph('Fotos').setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    fotos.forEach(function (url) {
+      try {
+        const img = body.appendImage(DriveApp.getFileById(idArquivoDrive_(url)).getBlob());
+        const w = img.getWidth(), h = img.getHeight();
+        if (w > 440) img.setWidth(440).setHeight(Math.round(h * 440 / w));
+      } catch (e) { body.appendParagraph('(foto indisponível: ' + url + ')'); }
+    });
+  }
+  body.appendParagraph('Gerado em ' + formatarDataHoraBr_(nowIso_())).editAsText().setFontSize(9).setForegroundColor('#6b7280');
+  doc.saveAndClose();
+
+  const arquivo = DriveApp.getFileById(doc.getId());
+  const pdfBlob = arquivo.getAs('application/pdf');
+  const nomeArquivo = 'manutencao_' + id + '_' + String(m.NOME_EQUIPAMENTO || '').replace(/[^\w\u00C0-\u00fa]+/g, '_') + '.pdf';
+  pdfBlob.setName(nomeArquivo);
+  const base64 = Utilities.base64Encode(pdfBlob.getBytes());
+  try { arquivo.setTrashed(true); } catch (e) { /* o rascunho fica na pasta, sem problema */ }
+  return { base64: base64, filename: nomeArquivo };
+}
+
+// ======================= PDF DE CHECKLISTS REALIZADOS (SEGURANÇA) =======================
+// [OUT/2026] Relatório em PDF dos checklists do período, com foco em
+// segurança: gráficos, quem realizou (operador), dia a dia, não
+// conformidades pontuadas, reincidência por equipamento, checklists sem
+// fechamento e campo de assinatura. Respeita os mesmos filtros da tela
+// (período, equipamento, resultado) e o isolamento por unidade/setor.
+
+// Gráfico em fundo claro (bom para imprimir). tipo: 'pizza' | 'colunas' | 'barras'.
+function chkGraficoClaro_(tipo, titulo, categorias, series, cores, largura, altura) {
+  if (!categorias || !categorias.length) return null;
+  const dt = Charts.newDataTable();
+  dt.addColumn(Charts.ColumnType.STRING, 'Categoria');
+  series.forEach(function (s) { dt.addColumn(Charts.ColumnType.NUMBER, s.nome); });
+  categorias.forEach(function (cat, i) {
+    dt.addRow([String(cat)].concat(series.map(function (s) { return Number(s.valores[i] || 0); })));
+  });
+  let b;
+  if (tipo === 'pizza') b = Charts.newPieChart();
+  else if (tipo === 'barras') b = Charts.newBarChart();
+  else b = Charts.newColumnChart();
+  b = b.setDataTable(dt.build())
+    .setTitle(titulo)
+    .setDimensions(largura || 560, altura || 300)
+    .setColors(cores)
+    .setOption('backgroundColor', '#ffffff')
+    .setOption('titleTextStyle', { color: '#171b1e', fontSize: 14, bold: true });
+  if (tipo === 'pizza') {
+    b = b.setOption('legend', { position: 'right', textStyle: { fontSize: 11 } });
+  } else {
+    if (series.length > 1) b = b.setStacked();
+    b = b.setOption('legend', series.length > 1 ? { position: 'bottom', textStyle: { fontSize: 10 } } : { position: 'none' });
+  }
+  return b.build().getAs('image/png');
+}
+
+function chkTabela_(body, cabecalho, linhas) {
+  const dados = [cabecalho].concat(linhas.map(function (l) {
+    return l.map(function (v) { return (v === null || v === undefined || v === '') ? '—' : String(v); });
+  }));
+  const t = body.appendTable(dados);
+  for (let r = 0; r < dados.length; r++) {
+    for (let c = 0; c < cabecalho.length; c++) {
+      const cell = t.getRow(r).getCell(c);
+      cell.setPaddingTop(3).setPaddingBottom(3).setPaddingLeft(4).setPaddingRight(4);
+      const tx = cell.editAsText().setFontSize(8.5);
+      if (r === 0) { cell.setBackgroundColor('#436722'); tx.setBold(true).setForegroundColor('#ffffff'); }
+      else if (r % 2 === 0) cell.setBackgroundColor('#f3f6ef');
+    }
+  }
+  return t;
+}
+
+function chkChaveDia_(valor) {
+  const d = parseData_(valor);
+  return d ? Utilities.formatDate(d, fusoHorario_(), 'yyyy-MM-dd') : '';
+}
+
+function chkPct_(parte, total) {
+  return total ? (Math.round(parte / total * 1000) / 10).toFixed(1).replace('.', ',') + '%' : '—';
+}
+
+function gerarChecklistsPDF_(p) {
+  // [SEGURANÇA OUT/2026] O PDF aceita:
+  //  - unidade específica ou 'TODAS' (coordenador de segurança / gerente);
+  //  - setor FABRICA, OPERACAO ou os dois juntos (setor = 'TODOS' → sem
+  //    filtro de setor). Quem é preso a um setor na planilha continua
+  //    recebendo só o dele, mesmo que peça os dois.
+  const todas = ehTodasUnidades_(p.unidade);
+  const unidade = todas ? 'TODAS' : exigirUnidade_(p.unidade);
+  validarAcessoUnidade_(p.idUsuario, unidade);
+  if (p._setorSessao) SETOR_PEDIDO_ = p._setorSessao;
+  const params = Object.assign({}, p, { unidade: unidade, periodo: p.periodo || 'mes' });
+  const janela = resolverPeriodo_(params);
+  const checklists = getChecklists_(params); // já vem filtrado e com ITENS
+  const unidadeLabel = (todas ? 'Todas as unidades' : unidade) +
+    ' · ' + (SETOR_PEDIDO_ ? rotuloSetor_(SETOR_PEDIDO_) : 'Fábrica e Operação');
+  const agora = new Date();
+
+  // ---------- Não conformidades ligadas aos checklists do período ----------
+  const idsChk = {};
+  checklists.forEach(function (c) { idsChk[String(c.ID_CHECKLIST)] = c; });
+  const ncs = readSheet_(SHEETS.NAO_CONFORMIDADES).filter(function (nc) {
+    return !!idsChk[String(nc.ID_CHECKLIST_ORIGEM)];
+  }).sort(function (a, b) { return ordenarPorDataDesc_(a.ABERTA_EM, b.ABERTA_EM); });
+  const ncAbertas = ncs.filter(function (n) { return String(n.STATUS) === 'aberta'; });
+
+  // ---------- Agregações ----------
+  const tot = { checklists: checklists.length, comPend: 0, itens: 0, ok: 0, nok: 0, na: 0 };
+  const porItem = {}, porOperador = {}, porDia = {}, porEquip = {};
+  const semFechamento = [];
+  checklists.forEach(function (c) {
+    const itens = c.ITENS || [];
+    let noksChk = 0;
+    itens.forEach(function (it) {
+      const r = String(it.RESPOSTA || '').toLowerCase();
+      tot.itens++;
+      if (r === 'ok') tot.ok++; else if (r === 'nok') { tot.nok++; noksChk++; } else tot.na++;
+      if (r === 'nok') porItem[it.ITEM] = (porItem[it.ITEM] || 0) + 1;
+    });
+    const pend = noksChk > 0 || String(c.STATUS) === 'pendencia';
+    if (pend) tot.comPend++;
+
+    const op = String(c.RESPONSAVEL || 'Não informado');
+    const o = porOperador[op] || (porOperador[op] = { n: 0, pend: 0, nok: 0 });
+    o.n++; if (pend) o.pend++; o.nok += noksChk;
+
+    const dia = chkChaveDia_(c.DATA_HORA) || 'sem-data';
+    const d = porDia[dia] || (porDia[dia] = { n: 0, pend: 0, nok: 0 });
+    d.n++; if (pend) d.pend++; d.nok += noksChk;
+
+    const eq = String(c.NOME_EQUIPAMENTO || c.ID_EQUIPAMENTO || '—');
+    const e = porEquip[eq] || (porEquip[eq] = { n: 0, pend: 0, nok: 0 });
+    e.n++; if (pend) e.pend++; e.nok += noksChk;
+
+    const temHorIni = c.HORIMETRO_INICIAL !== '' && c.HORIMETRO_INICIAL !== null && c.HORIMETRO_INICIAL !== undefined;
+    const fechado = c.FECHADO_EM !== '' && c.FECHADO_EM !== null && c.FECHADO_EM !== undefined;
+    if (temHorIni && !fechado) semFechamento.push(c);
+    c._pend = pend; c._noks = noksChk;
+  });
+  const conforme = tot.checklists - tot.comPend;
+  const chavesDia = Object.keys(porDia).filter(function (k) { return k !== 'sem-data'; }).sort();
+  const rotDia = function (k) { const pt = k.split('-'); return pt[2] + '/' + pt[1] + '/' + pt[0]; };
+  const operadores = Object.keys(porOperador).sort(function (a, b) { return porOperador[b].n - porOperador[a].n; });
+  const itensRank = Object.keys(porItem).sort(function (a, b) { return porItem[b] - porItem[a]; });
+  const equipsRank = Object.keys(porEquip).filter(function (k) { return porEquip[k].nok > 0; })
+    .sort(function (a, b) { return porEquip[b].nok - porEquip[a].nok; });
+
+  // ---------- Documento ----------
+  const doc = DocumentApp.create('tmp_checklists_' + new Date().getTime());
+  const body = doc.getBody();
+  body.setMarginTop(34).setMarginBottom(34).setMarginLeft(38).setMarginRight(38);
+  const VERDE = '#2F9E64', LARANJA = '#DF8630', VERMELHO = '#D64545', CINZA = '#9aa3ad';
+
+  try {
+    const logo = body.appendImage(Utilities.newBlob(Utilities.base64Decode(LOGO_ICC_BASE64), 'image/png', 'logo.png'));
+    logo.setWidth(48).setHeight(48);
+  } catch (e) { /* segue sem a logo */ }
+  body.appendParagraph('ICC Brazil · Central de Frota').editAsText().setFontSize(10).setForegroundColor('#6b7280');
+  body.appendParagraph('Relatório de checklists realizados — Segurança').setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  const filtrosTxt = [];
+  if (p.status === 'pendencia') filtrosTxt.push('somente com pendência');
+  if (p.status === 'ok') filtrosTxt.push('somente sem pendência');
+  if (p.idEquipamento && checklists.length) filtrosTxt.push('equipamento: ' + (checklists[0].NOME_EQUIPAMENTO || p.idEquipamento));
+  body.appendParagraph(unidadeLabel + '  ·  ' + janela.label + (filtrosTxt.length ? '  ·  ' + filtrosTxt.join(', ') : ''))
+    .editAsText().setFontSize(11).setBold(true);
+  body.appendParagraph('Gerado em ' + formatarDataHoraBr_(nowIso_()) + (p.geradoPor ? ' por ' + p.geradoPor : ''))
+    .editAsText().setFontSize(9).setForegroundColor('#6b7280');
+
+  if (!checklists.length) {
+    body.appendParagraph('Nenhum checklist encontrado para os filtros escolhidos.');
+    doc.saveAndClose();
+    return chkFinalizarPdf_(doc, unidadeLabel);
+  }
+
+  // ---------- Indicadores ----------
+  body.appendParagraph('Resumo do período').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  chkTabela_(body,
+    ['Checklists', 'Sem pendência', 'Com pendência', 'Conformidade', 'Itens NOK', 'NCs abertas (em aberto)', 'Sem fechamento'],
+    [[tot.checklists, conforme, tot.comPend, chkPct_(conforme, tot.checklists), tot.nok + ' de ' + tot.itens,
+      ncAbertas.length + ' de ' + ncs.length, semFechamento.length]]);
+
+  // ---------- Quebra por setor / unidade (só quando o PDF junta mais de um) ----------
+  const porSetor = {}, porUnidadeChk = {};
+  checklists.forEach(function (c) {
+    const st = rotuloSetor_(setorDoEquipamento_(c.ID_EQUIPAMENTO));
+    const a = porSetor[st] || (porSetor[st] = { n: 0, pend: 0, nok: 0 });
+    a.n++; if (c._pend) a.pend++; a.nok += c._noks;
+    const un = String(c.UNIDADE || '—');
+    const b = porUnidadeChk[un] || (porUnidadeChk[un] = {});
+    const bs = b[st] || (b[st] = { n: 0, pend: 0, nok: 0 });
+    bs.n++; if (c._pend) bs.pend++; bs.nok += c._noks;
+  });
+  if (!SETOR_PEDIDO_) {
+    body.appendParagraph('Resumo por setor').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    chkTabela_(body, ['Setor', 'Checklists', 'Com pendência', 'Itens NOK', 'Conformidade'],
+      Object.keys(porSetor).sort().map(function (k) {
+        const o = porSetor[k]; return [k, o.n, o.pend, o.nok, chkPct_(o.n - o.pend, o.n)];
+      }));
+  }
+  if (todas) {
+    body.appendParagraph('Resumo por unidade').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    const linhasUn = [];
+    Object.keys(porUnidadeChk).sort().forEach(function (un) {
+      Object.keys(porUnidadeChk[un]).sort().forEach(function (st) {
+        const o = porUnidadeChk[un][st];
+        linhasUn.push([un, st, o.n, o.pend, o.nok, chkPct_(o.n - o.pend, o.n)]);
+      });
+    });
+    chkTabela_(body, ['Unidade', 'Setor', 'Checklists', 'Com pendência', 'Itens NOK', 'Conformidade'], linhasUn);
+  }
+
+  // ---------- Alertas de segurança ----------
+  const alertas = [];
+  if (ncAbertas.length) alertas.push(ncAbertas.length + ' não conformidade(s) ainda em aberto, aguardando tratamento.');
+  const antigas = ncAbertas.filter(function (n) {
+    const d = parseData_(n.ABERTA_EM); return d && (agora - d) > 7 * 86400000;
+  });
+  if (antigas.length) alertas.push(antigas.length + ' não conformidade(s) aberta(s) há mais de 7 dias.');
+  const reincid = Object.keys(porEquip).filter(function (k) { return porEquip[k].pend >= 2; });
+  if (reincid.length) alertas.push('Equipamento(s) com reincidência (2+ checklists com pendência): ' + reincid.join(', ') + '.');
+  if (itensRank.length) alertas.push('Item mais reprovado: "' + itensRank[0] + '" (' + porItem[itensRank[0]] + ' ocorrência(s)).');
+  if (semFechamento.length) alertas.push(semFechamento.length + ' checklist(s) sem horímetro final / fechamento do turno.');
+  body.appendParagraph('Pontos de atenção').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  if (alertas.length) alertas.forEach(function (a) { body.appendListItem(a).setGlyphType(DocumentApp.GlyphType.BULLET); });
+  else body.appendParagraph('Nenhum ponto de atenção no período. ✔');
+
+  // ---------- Gráficos ----------
+  body.appendParagraph('Gráficos').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  const imgs = [];
+  try { imgs.push(chkGraficoClaro_('pizza', 'Resultado dos itens verificados', ['OK', 'NOK', 'N/A'],
+    [{ nome: 'Itens', valores: [tot.ok, tot.nok, tot.na] }], [VERDE, VERMELHO, CINZA], 520, 260)); } catch (e) {}
+  try {
+    const dias = chavesDia.slice(-31);
+    if (dias.length) imgs.push(chkGraficoClaro_('colunas', 'Checklists por dia (sem pendência x com pendência)', dias.map(rotDia),
+      [{ nome: 'Sem pendência', valores: dias.map(function (k) { return porDia[k].n - porDia[k].pend; }) },
+       { nome: 'Com pendência', valores: dias.map(function (k) { return porDia[k].pend; }) }], [VERDE, VERMELHO], 640, 300));
+  } catch (e) {}
+  try {
+    if (itensRank.length) imgs.push(chkGraficoClaro_('barras', 'Itens mais reprovados (NOK)', itensRank.slice(0, 8),
+      [{ nome: 'NOK', valores: itensRank.slice(0, 8).map(function (k) { return porItem[k]; }) }], [VERMELHO], 640, 300));
+  } catch (e) {}
+  try {
+    const ops = operadores.slice(0, 10);
+    imgs.push(chkGraficoClaro_('barras', 'Checklists por operador', ops,
+      [{ nome: 'Sem pendência', valores: ops.map(function (k) { return porOperador[k].n - porOperador[k].pend; }) },
+       { nome: 'Com pendência', valores: ops.map(function (k) { return porOperador[k].pend; }) }], [VERDE, VERMELHO], 640, 300));
+  } catch (e) {}
+  imgs.forEach(function (blob) {
+    if (!blob) return;
+    try { const im = body.appendImage(blob); const w = im.getWidth(), h = im.getHeight(); if (w > 470) im.setWidth(470).setHeight(Math.round(h * 470 / w)); } catch (e) {}
+  });
+
+  // ---------- Por operador ----------
+  body.appendParagraph('Checklists por operador (quem realizou)').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  chkTabela_(body, ['Operador', 'Checklists', 'Com pendência', 'Itens NOK', 'Conformidade'],
+    operadores.map(function (k) { const o = porOperador[k]; return [k, o.n, o.pend, o.nok, chkPct_(o.n - o.pend, o.n)]; }));
+
+  // ---------- Por data ----------
+  body.appendParagraph('Checklists por data').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  chkTabela_(body, ['Data', 'Checklists', 'Sem pendência', 'Com pendência', 'Itens NOK'],
+    chavesDia.slice().reverse().map(function (k) { const d = porDia[k]; return [rotDia(k), d.n, d.n - d.pend, d.pend, d.nok]; }));
+
+  // ---------- Reincidência por equipamento ----------
+  if (equipsRank.length) {
+    body.appendParagraph('Equipamentos com itens reprovados').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    chkTabela_(body, ['Equipamento', 'Checklists', 'Com pendência', 'Itens NOK'],
+      equipsRank.slice(0, 15).map(function (k) { const e = porEquip[k]; return [k, e.n, e.pend, e.nok]; }));
+  }
+
+  // ---------- Não conformidades pontuadas ----------
+  body.appendParagraph('Não conformidades pontuadas nos checklists').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  if (!ncs.length) body.appendParagraph('Nenhuma não conformidade gerada no período. ✔');
+  else {
+    const LIM_NC = 80;
+    chkTabela_(body, ['NC', 'Aberta em', 'Equipamento', 'Item', 'Descrição', 'Operador', 'Situação'],
+      ncs.slice(0, LIM_NC).map(function (n) {
+        const origem = idsChk[String(n.ID_CHECKLIST_ORIGEM)] || {};
+        let sit = 'Fechada';
+        if (String(n.STATUS) === 'aberta') {
+          const d = parseData_(n.ABERTA_EM);
+          sit = 'Aberta' + (d ? ' (' + Math.floor((agora - d) / 86400000) + 'd)' : '');
+        }
+        return [n.ID_NC, formatarDataHoraBr_(n.ABERTA_EM), n.NOME_EQUIPAMENTO, n.ITEM,
+          String(n.DESCRICAO || '').substring(0, 160), origem.RESPONSAVEL, sit];
+      }));
+    if (ncs.length > LIM_NC) body.appendParagraph('Mostrando ' + LIM_NC + ' de ' + ncs.length + ' não conformidades.').editAsText().setFontSize(9).setForegroundColor('#6b7280');
+  }
+
+  // ---------- Checklists sem fechamento ----------
+  if (semFechamento.length) {
+    body.appendParagraph('Checklists sem fechamento do turno').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    chkTabela_(body, ['Checklist', 'Data/hora', 'Equipamento', 'Operador', 'Horímetro inicial'],
+      semFechamento.slice(0, 60).map(function (c) {
+        return [c.ID_CHECKLIST, formatarDataHoraBr_(c.DATA_HORA), c.NOME_EQUIPAMENTO, c.RESPONSAVEL, c.HORIMETRO_INICIAL];
+      }));
+  }
+
+  // ---------- Detalhe das reprovações (com fotos) ----------
+  const comNok = checklists.filter(function (c) { return c._noks > 0; });
+  if (comNok.length) {
+    body.appendParagraph('Detalhe das reprovações').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    let fotosUsadas = 0;
+    const MAX_FOTOS = 24, MAX_CHK = 40;
+    comNok.slice(0, MAX_CHK).forEach(function (c) {
+      body.appendParagraph(c.ID_CHECKLIST + ' · ' + c.NOME_EQUIPAMENTO + ' · ' + formatarDataHoraBr_(c.DATA_HORA) + ' · ' + (c.RESPONSAVEL || '—'))
+        .setHeading(DocumentApp.ParagraphHeading.HEADING4);
+      (c.ITENS || []).filter(function (it) { return String(it.RESPOSTA).toLowerCase() === 'nok'; }).forEach(function (it) {
+        const par = body.appendParagraph('NOK — ' + it.ITEM + (it.DESCRICAO_PROBLEMA ? ': ' + it.DESCRICAO_PROBLEMA : ''));
+        par.editAsText().setFontSize(10).setForegroundColor(VERMELHO);
+        if (it.FOTO_PROBLEMA && fotosUsadas < MAX_FOTOS) {
+          fotosUsadas++;
+          try {
+            const img = body.appendImage(DriveApp.getFileById(idArquivoDrive_(it.FOTO_PROBLEMA)).getBlob());
+            const w = img.getWidth(), h = img.getHeight();
+            if (w > 260) img.setWidth(260).setHeight(Math.round(h * 260 / w));
+          } catch (e) { body.appendParagraph('(foto indisponível)').editAsText().setFontSize(8).setForegroundColor('#6b7280'); }
+        }
+      });
+    });
+    if (comNok.length > MAX_CHK) body.appendParagraph('Mostrando ' + MAX_CHK + ' de ' + comNok.length + ' checklists com reprovação.').editAsText().setFontSize(9).setForegroundColor('#6b7280');
+  }
+
+  // ---------- Assinaturas ----------
+  body.appendParagraph('Conferência').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  body.appendParagraph('Responsável pela segurança: ______________________________   Data: ____/____/______');
+  body.appendParagraph('Gestor da unidade: ______________________________________   Data: ____/____/______');
+  body.appendParagraph('Documento gerado automaticamente pelo app Central de Frota — ICC Brazil.').editAsText().setFontSize(8).setForegroundColor('#6b7280');
+
+  doc.saveAndClose();
+  return chkFinalizarPdf_(doc, unidadeLabel);
+}
+
+function chkFinalizarPdf_(doc, unidadeLabel) {
+  const arquivo = DriveApp.getFileById(doc.getId());
+  const pdfBlob = arquivo.getAs('application/pdf');
+  const nome = 'checklists_' + String(unidadeLabel).replace(/[^\w\u00C0-\u00fa]+/g, '_') + '_' +
+    Utilities.formatDate(new Date(), fusoHorario_(), 'yyyy-MM-dd_HHmm') + '.pdf';
+  pdfBlob.setName(nome);
+  const base64 = Utilities.base64Encode(pdfBlob.getBytes());
+  let url = '';
+  try {
+    const f = pastaPorNome_(FOLDER_RELATORIOS).createFile(pdfBlob);
+    f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    url = f.getUrl();
+  } catch (e) { /* o download por base64 continua funcionando */ }
+  try { arquivo.setTrashed(true); } catch (e) {}
+  return { base64: base64, filename: nome, url: url };
 }
 
 // ======================= PAINEL =======================
@@ -1306,7 +4364,32 @@ function ordenarPorDataDesc_(a, b) {
  *  - preventivas previstas para os próximos 30 dias;
  *  - checklist de hoje, equipamento por equipamento (feito x pendente).
  */
+// [PERF 14/09] getPainel_ já era só leitura (não competia pela trava),
+// mas é chamada toda vez que o Painel abre e sempre lia 4 abas inteiras
+// (EQUIPAMENTOS, MANUTENCOES, CHECKLISTS, NAO_CONFORMIDADES) do zero.
+// Agora tem um cache de 20s por unidade — curto o bastante para não dar
+// sensação de dado desatualizado, mas suficiente para absorver a
+// navegação normal entre telas (que reabre o Painel com frequência) sem
+// reler tudo a cada vez. É invalidado na hora (invalidarCachePainel_) logo
+// depois de qualquer cadastro de equipamento, checklist, manutenção,
+// lavagem ou troca de gás daquela unidade, então uma escrita sempre
+// aparece no Painel imediatamente — o cache nunca serve dado desatualizado
+// depois de uma ação do próprio usuário.
 function getPainel_(params) {
+  const unidade = params.unidade;
+  return cacheado_('painel_' + String(unidade || '').trim() + '_' + SETOR_PEDIDO_, 20, function () {
+    return getPainelCalcular_(params);
+  });
+}
+
+function invalidarCachePainel_(unidade) {
+  try {
+    const base = 'painel_' + String(unidade || '').trim() + '_';
+    CacheService.getScriptCache().removeAll([base, base + 'FABRICA', base + 'OPERACAO']);
+  } catch (e) { /* falha ao invalidar não deve quebrar o registro; o cache expira sozinho em 20s */ }
+}
+
+function getPainelCalcular_(params) {
   const unidade = params.unidade;
   const agora = new Date();
   const hoje = inicioDoDia_(agora);
@@ -1314,6 +4397,11 @@ function getPainel_(params) {
 
   const equipamentos = filtrarPorUnidade_(readSheet_(SHEETS.EQUIPAMENTOS), unidade);
   const ativos = equipamentos.filter(function (e) { return String(e.STATUS) !== 'inativo'; });
+  // Só quem está "em uso" entra no Checklist do dia — Parado e Em manutenção
+  // não têm o que verificar antes de operar hoje, então nem contam como
+  // pendência nem aparecem na lista (voltam a exigir checklist quando o
+  // status do equipamento virar "em uso" de novo).
+  const emUso = equipamentos.filter(function (e) { return String(e.STATUS) === 'em_uso'; });
   const manutencoes = filtrarPorUnidade_(readSheet_(SHEETS.MANUTENCOES), unidade);
   const checklists = filtrarPorUnidade_(readSheet_(SHEETS.CHECKLISTS), unidade);
   const ncs = filtrarPorUnidade_(readSheet_(SHEETS.NAO_CONFORMIDADES), unidade);
@@ -1339,7 +4427,8 @@ function getPainel_(params) {
         TIPO: e.TIPO, UNIDADE: e.UNIDADE, STATUS_DESDE: e.STATUS_DESDE,
         TEMPO_MS: ms, TEMPO_TEXTO: desde ? formatarDuracao_(ms) : '-',
         MANUTENCOES_ABERTAS: emAberto.length,
-        TITULO_ATUAL: emAberto.length ? emAberto[0].TITULO : ''
+        TITULO_ATUAL: emAberto.length ? emAberto[0].TITULO : '',
+        STATUS_MANUTENCAO: emAberto.length ? String(emAberto[0].STATUS) : ''
       };
     })
     .sort(function (a, b) { return b.TEMPO_MS - a.TEMPO_MS; });
@@ -1377,7 +4466,7 @@ function getPainel_(params) {
     }
   });
 
-  const checklistDoDia = ativos.map(function (e) {
+  const checklistDoDia = emUso.map(function (e) {
     const c = feitosHoje[String(e.ID_EQUIPAMENTO)];
     return {
       ID_EQUIPAMENTO: e.ID_EQUIPAMENTO, NOME: e.NOME, CODIGO: e.CODIGO,
@@ -1416,6 +4505,7 @@ function getPainel_(params) {
       checklistsHoje: checklistsHoje.length,
       naoConformidadesAbertas: ncs.filter(function (n) { return String(n.STATUS) === 'aberta'; }).length,
       manutencoesAbertas: manutencoes.filter(function (m) { return String(m.STATUS) === 'aberta'; }).length,
+      manutencoesAcionadas: manutencoes.filter(function (m) { return String(m.STATUS) === 'acionado'; }).length,
       manutencoesAndamento: manutencoes.filter(function (m) { return String(m.STATUS) === 'andamento'; }).length,
       manutencoesConcluidas: manutencoes.filter(function (m) { return String(m.STATUS) === 'concluida'; }).length,
       preventivasRealizadas: manutencoes.filter(function (m) {
@@ -1423,6 +4513,19 @@ function getPainel_(params) {
       }).length
     },
     equipamentosEmManutencao: equipamentosEmManutencao,
+    // [OUT/2026] Máquinas paradas agora, para o card do Painel.
+    equipamentosParados: equipamentos
+      .filter(function (e) { return String(e.STATUS) === 'parado'; })
+      .map(function (e) {
+        const desde = parseData_(e.STATUS_DESDE) || parseData_(e.CRIADO_EM);
+        const ms = desde ? Math.max(0, agora.getTime() - desde.getTime()) : 0;
+        return {
+          ID_EQUIPAMENTO: e.ID_EQUIPAMENTO, NOME: e.NOME, CODIGO: e.CODIGO, TIPO: e.TIPO,
+          STATUS_DESDE: normalizarDataIso_(e.STATUS_DESDE), OBSERVACOES: e.OBSERVACOES,
+          TEMPO_MS: ms, TEMPO_TEXTO: desde ? formatarDuracao_(ms) : '-'
+        };
+      })
+      .sort(function (a, b) { return b.TEMPO_MS - a.TEMPO_MS; }),
     preventivasProximas: preventivasProximas,
     checklistDoDia: checklistDoDia,
     checklistDoDiaResumo: { total: checklistDoDia.length, feitos: feitos, pendentes: checklistDoDia.length - feitos }
@@ -1485,7 +4588,7 @@ function getHistorico_(params) {
           dataPrevista: normalizarDataIso_(m.DATA_PREVISTA),
           iniciadaEm: normalizarDataIso_(m.INICIADA_EM),
           concluidaEm: normalizarDataIso_(m.CONCLUIDA_EM),
-          tempoTexto: formatarDuracao_(tempoEmManutencaoMs_(m, null))
+          tempoTexto: formatarHoras_(tempoEmManutencaoMs_(m, null))
         });
       });
   }
@@ -1509,6 +4612,50 @@ function getHistorico_(params) {
           foto: nc.FOTO,
           fechadaEm: normalizarDataIso_(nc.FECHADA_EM),
           idChecklistOrigem: nc.ID_CHECKLIST_ORIGEM
+        });
+      });
+  }
+
+  if (!tipoFiltro || tipoFiltro === 'lavagem') {
+    filtrarPorUnidade_(readSheet_(SHEETS.LAVAGENS), params.unidade)
+      .filter(casaEquipamento)
+      .filter(function (l) { return dentroDoPeriodo_(l.DATA_HORA, janela); })
+      .forEach(function (l) {
+        eventos.push({
+          tipo: 'lavagem',
+          id: l.ID_LAVAGEM,
+          data: normalizarDataIso_(l.DATA_HORA),
+          unidade: l.UNIDADE,
+          idEquipamento: l.ID_EQUIPAMENTO,
+          nomeEquipamento: l.NOME_EQUIPAMENTO,
+          titulo: 'Lavagem ' + (String(l.STATUS) === 'pendencia' ? 'com pendência' : 'sem pendência'),
+          descricao: 'Responsável: ' + (l.RESPONSAVEL || '-'),
+          status: l.STATUS,
+          responsavel: l.RESPONSAVEL,
+          foto: l.FOTO_EQUIPAMENTO
+        });
+      });
+  }
+
+  if (!tipoFiltro || tipoFiltro === 'troca_gas') {
+    filtrarPorUnidade_(readSheet_(SHEETS.TROCAS_GAS), params.unidade)
+      .filter(casaEquipamento)
+      .filter(function (t) { return dentroDoPeriodo_(t.DATA_HORA, janela); })
+      .forEach(function (t) {
+        eventos.push({
+          tipo: 'troca_gas',
+          id: t.ID_TROCA_GAS,
+          data: normalizarDataIso_(t.DATA_HORA),
+          unidade: t.UNIDADE,
+          idEquipamento: t.ID_EQUIPAMENTO,
+          nomeEquipamento: t.NOME_EQUIPAMENTO,
+          titulo: 'Troca de gás · ' + t.FORNECEDOR,
+          descricao: 'Responsável: ' + (t.RESPONSAVEL || '-') + ' · Horímetro: ' + t.HORIMETRO,
+          status: 'concluida',
+          responsavel: t.RESPONSAVEL,
+          fornecedor: t.FORNECEDOR,
+          custo: t.CUSTO,
+          horasOperacao: t.HORAS_OPERACAO
         });
       });
   }
@@ -1551,6 +4698,7 @@ function getRelatorio_(params) {
     .filter(function (nc) { return dentroDoPeriodo_(nc.ABERTA_EM, janela); });
 
   const manutencoesAbertas = manutencoes.filter(function (m) { return String(m.STATUS) === 'aberta'; }).length;
+  const manutencoesAcionadas = manutencoes.filter(function (m) { return String(m.STATUS) === 'acionado'; }).length;
   const manutencoesAndamento = manutencoes.filter(function (m) { return String(m.STATUS) === 'andamento'; }).length;
   const manutencoesConcluidas = manutencoes.filter(function (m) { return String(m.STATUS) === 'concluida'; }).length;
 
@@ -1559,8 +4707,9 @@ function getRelatorio_(params) {
   // janela do período; o tempo é recortado dentro da janela.
   const rankingMap = {};
   manutencoesUnidade.forEach(function (m) {
-    if (String(m.STATUS) === 'aberta') return; // ainda não começou a contar
-    const inicio = parseData_(m.INICIADA_EM) || parseData_(m.ABERTA_EM);
+    // [FLUXO OUT/2026] Conta desde a ABERTURA do chamado (a máquina já está
+    // fora de operação a partir dali), não só depois do início do serviço.
+    const inicio = parseData_(m.ABERTA_EM) || parseData_(m.INICIADA_EM);
     if (!inicio) return;
     const fim = parseData_(m.CONCLUIDA_EM) || agora;
     // Só entra no ranking a manutenção cujo intervalo encosta na janela do
@@ -1592,7 +4741,7 @@ function getRelatorio_(params) {
         quantidadeManutencoes: r.quantidade,
         tempoMs: r.ms,
         tempoHoras: Math.round(r.ms / 360000) / 10,
-        tempoTexto: formatarDuracao_(r.ms)
+        tempoTexto: formatarHoras_(r.ms)
       };
     })
     .sort(function (a, b) { return b.tempoMs - a.tempoMs; });
@@ -1635,6 +4784,117 @@ function getRelatorio_(params) {
   // Não conformidades mais recorrentes (por item) — insumo do plano de ação.
   const ncPorItem = agruparContagem_(ncs, 'ITEM');
 
+  // ---- Ranking: equipamentos com MAIS manutenções no período (contagem,
+  // não tempo — os dois rankings respondem perguntas diferentes: "qual
+  // deu mais trabalho de novo" vs. "qual ficou mais tempo parado"). ----
+  const rankingQuantidade = Object.keys(rankingMap)
+    .map(function (k) {
+      const r = rankingMap[k];
+      const equipamento = equipamentos.find(function (e) { return String(e.ID_EQUIPAMENTO) === String(r.idEquipamento); });
+      return {
+        idEquipamento: r.idEquipamento, nomeEquipamento: r.nomeEquipamento,
+        codigo: equipamento ? equipamento.CODIGO : '', tipo: equipamento ? equipamento.TIPO : '',
+        quantidadeManutencoes: r.quantidade, tempoTexto: formatarHoras_(r.ms)
+      };
+    })
+    .sort(function (a, b) { return b.quantidadeManutencoes - a.quantidadeManutencoes; });
+
+  // [NOVO 17/09] Horas por status DENTRO do período, a partir do
+  // histórico de mudanças de status — diferente do "parados/em manutenção
+  // AGORA" acima, que é sempre o instante presente. Aqui é "quantas horas
+  // cada equipamento passou em cada status durante o período escolhido"
+  // (semana, mês, personalizado), o que permite somar a indisponibilidade
+  // da frota inteira num número só.
+  const historicoUnidade = filtrarPorUnidade_(readSheet_(SHEETS.STATUS_HISTORICO), unidade);
+  const historicoPorEquipamento = {};
+  historicoUnidade.forEach(function (h) {
+    const chave = String(h.ID_EQUIPAMENTO);
+    if (!historicoPorEquipamento[chave]) historicoPorEquipamento[chave] = [];
+    historicoPorEquipamento[chave].push(h);
+  });
+  Object.keys(historicoPorEquipamento).forEach(function (chave) {
+    historicoPorEquipamento[chave].sort(function (a, b) {
+      const da = parseData_(a.DATA_HORA), db = parseData_(b.DATA_HORA);
+      return (da ? da.getTime() : 0) - (db ? db.getTime() : 0); // ascendente (mais antigo primeiro)
+    });
+  });
+
+  let indisponibilidadeMs = 0; // manutenção + parado, somado de toda a frota
+  let manutencaoMs = 0;
+  let paradoMs = 0;
+  let operacaoMs = 0; // em_uso, somado de toda a frota
+  const horasPorMaquina = equipamentosAtivos.map(function (e) {
+    const historico = historicoPorEquipamento[String(e.ID_EQUIPAMENTO)] || [];
+    const segmentos = segmentosStatusEquipamento_(e, historico);
+    const horas = horasPorStatusNoPeriodo_(segmentos, janela, e.SETOR);
+    manutencaoMs += horas.manutencao;
+    paradoMs += horas.parado;
+    operacaoMs += horas.em_uso;
+    return {
+      idEquipamento: e.ID_EQUIPAMENTO, nomeEquipamento: e.NOME, codigo: e.CODIGO, tipo: e.TIPO, unidade: e.UNIDADE,
+      emUsoMs: horas.em_uso, emUsoTexto: formatarHoras_(horas.em_uso),
+      manutencaoMs: horas.manutencao, manutencaoTexto: formatarHoras_(horas.manutencao),
+      paradoMs: horas.parado, paradoTexto: formatarHoras_(horas.parado),
+      indisponibilidadeMs: horas.manutencao + horas.parado,
+      indisponibilidadeTexto: formatarHoras_(horas.manutencao + horas.parado),
+      // % do expediente em que a máquina esteve disponível para operar
+      disponibilidadePct: pct_(horas.em_uso, horas.em_uso + horas.manutencao + horas.parado)
+    };
+  });
+  indisponibilidadeMs = manutencaoMs + paradoMs;
+
+  // ---- [OUT/2026] TEMPO EM OPERAÇÃO × TEMPO SEM MANUTENÇÃO ----
+  // São duas coisas diferentes:
+  //  • "Sem manutenção" = expediente em que a máquina NÃO estava quebrada
+  //    (status em_uso). Diz que ela estava disponível, não que trabalhou.
+  //  • "Em operação" = horas que ela REALMENTE rodou, pelo horímetro
+  //    anotado em cada troca de gás (soma de HORAS_OPERACAO das trocas do
+  //    período). Máquina sem troca de gás no período fica sem esse número.
+  const gas = getRelatorioGas_(params);
+  const gasPorFrota = {};
+  gas.custoEKgPorFrota.forEach(function (g) { gasPorFrota[String(g.idEquipamento)] = g; });
+  // [OUT/2026] As horas em operação agora vêm das HORAS RODADAS do
+  // checklist: horímetro final (fechamento) − horímetro inicial de cada
+  // checklist fechado no período. O horímetro das trocas de gás deixou de
+  // ser a fonte (continua valendo no Relatório de Gás). Máquina sem
+  // checklist fechado no período fica sem esse número.
+  const rodadasPorFrota = {};
+  filtrarPorUnidade_(readSheet_(SHEETS.CHECKLISTS), params.unidade).forEach(function (c) {
+    if (!textoLimpo_(c.FECHADO_EM) || !dentroDoPeriodo_(c.DATA_HORA, janela)) return;
+    if (c.HORIMETRO_INICIAL === '' || c.HORIMETRO_INICIAL === null || c.HORIMETRO_INICIAL === undefined) return;
+    if (c.HORIMETRO_FINAL === '' || c.HORIMETRO_FINAL === null || c.HORIMETRO_FINAL === undefined) return;
+    const rodou = Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL);
+    if (isNaN(rodou) || rodou < 0) return;
+    const chave = String(c.ID_EQUIPAMENTO);
+    rodadasPorFrota[chave] = (rodadasPorFrota[chave] || 0) + rodou;
+  });
+  let operacaoRealH = 0, maquinasComHorimetro = 0, semManutComHorimetroMs = 0;
+  horasPorMaquina.forEach(function (h) {
+    const g = gasPorFrota[String(h.idEquipamento)];
+    const rodadas = rodadasPorFrota[String(h.idEquipamento)];
+    const horasOp = rodadas !== undefined ? Math.round(rodadas * 10) / 10 : null;
+    h.semManutencaoMs = h.emUsoMs;
+    h.semManutencaoTexto = h.emUsoTexto;
+    h.operacaoHoras = horasOp;
+    h.operacaoTexto = horasOp === null ? '—' : formatarHoras_(horasOp * 3600000);
+    h.trocasGas = g ? g.quantidadeTrocas : 0;
+    // Utilização = do tempo em que estava disponível, quanto realmente rodou.
+    h.utilizacaoPct = horasOp === null ? null : utilizacaoPct_(horasOp * 3600000, h.emUsoMs);
+    if (horasOp !== null) { operacaoRealH += horasOp; maquinasComHorimetro++; semManutComHorimetroMs += h.emUsoMs; }
+  });
+
+  const horasPorMaquinaMap = {};
+  horasPorMaquina.forEach(function (h) { horasPorMaquinaMap[String(h.idEquipamento)] = h; });
+  const comparativoCustoHorasOperacao = gas.custoEKgPorFrota.map(function (g) {
+    const horasOperacaoH = (g.horasOperacao !== null && g.horasOperacao !== undefined) ? g.horasOperacao : 0;
+    return {
+      idEquipamento: g.idEquipamento, nomeEquipamento: g.nomeEquipamento,
+      custoGasTotal: g.custoTotal, kgTotal: g.kgTotal,
+      horasOperacao: horasOperacaoH,
+      custoPorHoraOperacao: horasOperacaoH > 0 ? Math.round((g.custoTotal / horasOperacaoH) * 100) / 100 : null
+    };
+  }).sort(function (a, b) { return (b.custoPorHoraOperacao || 0) - (a.custoPorHoraOperacao || 0); });
+
   return {
     unidade: ehTodasUnidades_(unidade) ? 'TODAS' : unidade,
     geradoEm: nowIso_(),
@@ -1651,6 +4911,13 @@ function getRelatorio_(params) {
       checklistsComPendencia: checklists.filter(function (c) { return String(c.STATUS) === 'pendencia'; }).length,
       manutencoesAbertas: manutencoesAbertas,
       manutencoesAndamento: manutencoesAndamento,
+      // [NOVO 17/09] "Ativas" = aberta + em andamento, num número só — o
+      // "Manut. abertas" sozinho confundia (mostrava 0 mesmo com
+      // equipamento em manutenção, porque a manutenção já tinha virado
+      // "Em andamento"). manutencoesAbertas/manutencoesAndamento
+      // continuam disponíveis separados pra quem quiser o detalhe.
+      manutencoesAcionadas: manutencoesAcionadas,
+      manutencoesAtivas: manutencoesAbertas + manutencoesAcionadas + manutencoesAndamento,
       manutencoesConcluidas: manutencoesConcluidas,
       manutencoesTotal: manutencoes.length,
       manutencoesCorretivas: manutencoes.filter(function (m) { return String(m.TIPO) === 'corretiva'; }).length,
@@ -1660,17 +4927,43 @@ function getRelatorio_(params) {
       equipamentosParadosAgora: parados.length,
       equipamentosEmManutencaoAgora: emManutencaoAgora.length
     },
+    // [NOVO 17/09] Impacto em horas, dentro do período selecionado —
+    // "quantas horas ficamos sem máquina" (manutenção + parado, somado de
+    // toda a frota) e "quantas horas a frota ficou em operação".
+    impacto: {
+      indisponibilidadeMs: indisponibilidadeMs, indisponibilidadeTexto: formatarHoras_(indisponibilidadeMs),
+      manutencaoMs: manutencaoMs, manutencaoTexto: formatarHoras_(manutencaoMs),
+      paradoMs: paradoMs, paradoTexto: formatarHoras_(paradoMs),
+      operacaoMs: operacaoMs, operacaoTexto: formatarHoras_(operacaoMs),
+      // [FLUXO OUT/2026] Tudo acima é hora de EXPEDIENTE (ver EXPEDIENTE).
+      expediente: descricaoExpediente_(SETOR_PEDIDO_),
+      // "operacao*" acima é o tempo SEM MANUTENÇÃO (máquina disponível).
+      semManutencaoMs: operacaoMs, semManutencaoTexto: formatarHoras_(operacaoMs),
+      // Tempo em operação de verdade: horímetro das trocas de gás do período.
+      operacaoRealHoras: Math.round(operacaoRealH * 10) / 10,
+      operacaoRealTexto: maquinasComHorimetro ? formatarHoras_(operacaoRealH * 3600000) : '—',
+      maquinasComHorimetro: maquinasComHorimetro,
+      utilizacaoPct: maquinasComHorimetro ? utilizacaoPct_(operacaoRealH * 3600000, semManutComHorimetroMs) : null,
+      disponibilidadePct: pct_(operacaoMs, operacaoMs + indisponibilidadeMs),
+      impactoPct: pct_(indisponibilidadeMs, operacaoMs + indisponibilidadeMs)
+    },
+    // Tempo médio de cada etapa dos chamados FINALIZADOS no período.
+    temposMedios: temposMediosManutencao_(manutencoes),
+    // [OUT/2026 — 15/10] Prestadores e causa raiz.
+    analise: analiseManutencao_(manutencoes, horasPorMaquina),
+    horasPorMaquina: horasPorMaquina.sort(function (a, b) { return b.indisponibilidadeMs - a.indisponibilidadeMs; }),
     statusFrota: statusFrota,
     manutencoesPorStatus: {
       aberta: manutencoesAbertas,
+      acionado: manutencoesAcionadas,
       andamento: manutencoesAndamento,
       concluida: manutencoesConcluidas
     },
     // Pronto para desenhar o gráfico de barras (mesma ordem em todo lugar).
     graficoManutencoesPorStatus: {
-      categorias: ['Abertas', 'Em andamento', 'Concluídas'],
-      valores: [manutencoesAbertas, manutencoesAndamento, manutencoesConcluidas],
-      cores: ['#D64545', '#DF8630', '#2F9E64']
+      categorias: ['Abertas', 'Técnico acionado', 'Em andamento', 'Finalizadas'],
+      valores: [manutencoesAbertas, manutencoesAcionadas, manutencoesAndamento, manutencoesConcluidas],
+      cores: ['#D64545', '#3B7DD8', '#DF8630', '#2F9E64']
     },
     graficoStatusFrota: {
       categorias: ['Em uso', 'Em manutenção', 'Parado', 'Inativo'],
@@ -1678,16 +4971,331 @@ function getRelatorio_(params) {
       cores: ['#2F9E64', '#DF8630', '#D64545', '#6b7280']
     },
     rankingTempoManutencao: ranking,
+    rankingQuantidadeManutencao: rankingQuantidade,
     equipamentosParados: parados,
     equipamentosEmManutencao: emManutencaoAgora,
     naoConformidadesPorItem: ncPorItem,
     naoConformidadesAbertasLista: ncs.filter(function (nc) { return String(nc.STATUS) === 'aberta'; }),
+    // [NOVO 17/09] Gás e comparativo custo × horas de operação real,
+    // embutidos aqui pra virar UM relatório só, como pedido — quem quiser
+    // o detalhe completo de gás (fornecedores, tabela de trocas) continua
+    // tendo a tela de Relatório de Gás à parte.
+    gas: gas,
+    comparativoCustoHorasOperacao: comparativoCustoHorasOperacao,
     // Registros do período, para a tabela detalhada e o CSV do frontend.
     manutencoes: manutencoes.map(function (m) {
       const ms = tempoEmManutencaoMs_(m, null);
-      return Object.assign({}, m, { TEMPO_MANUTENCAO_MS: ms, TEMPO_MANUTENCAO_TEXTO: formatarDuracao_(ms) });
+      const copia = Object.assign({}, m, { TEMPO_MANUTENCAO_MS: ms, TEMPO_MANUTENCAO_TEXTO: formatarHoras_(ms) });
+      return anexarTemposManutencao_(copia);
     }),
     checklists: checklists
+  };
+}
+
+// ======================= RELATÓRIO DE TROCA DE GÁS =======================
+
+/**
+ * Indicadores, ranking e dados de gráfico da troca de gás no período —
+ * mesma lógica de "recortar pela janela de período" do relatório de
+ * frota, só que em cima de TROCAS_GAS. Custo é sempre o valor fixo da
+ * troca (fornecedor); "horas" é sempre HORAS_OPERACAO (intervalo até a
+ * troca anterior da mesma frota).
+ */
+// [OUT/2026] O Relatório Executivo pedia este relatório duas vezes na mesma
+// chamada (uma dentro de getRelatorio_, outra direto). Agora o resultado é
+// guardado durante a execução e reaproveitado.
+const MEMO_RELATORIO_GAS = {};
+function getRelatorioGas_(params) {
+  const chave = [params.unidade, params.periodo, params.dataInicio, params.dataFim, params.idEquipamento, SETOR_PEDIDO_].join('|');
+  if (!MEMO_RELATORIO_GAS[chave]) MEMO_RELATORIO_GAS[chave] = getRelatorioGasCalcular_(params);
+  return MEMO_RELATORIO_GAS[chave];
+}
+
+function getRelatorioGasCalcular_(params) {
+  const janela = resolverPeriodo_(Object.assign({ periodo: params.periodo || 'mes' }, params));
+  const unidade = params.unidade;
+
+  const todas = filtrarPorUnidade_(readSheet_(SHEETS.TROCAS_GAS), unidade);
+  const trocas = todas.filter(function (t) { return dentroDoPeriodo_(t.DATA_HORA, janela); });
+
+  const custoTotal = trocas.reduce(function (soma, t) { return soma + (Number(t.CUSTO) || 0); }, 0);
+  const comHoras = trocas.filter(function (t) { return t.HORAS_OPERACAO !== '' && t.HORAS_OPERACAO !== null && t.HORAS_OPERACAO !== undefined; });
+  const horasTotal = comHoras.reduce(function (soma, t) { return soma + (Number(t.HORAS_OPERACAO) || 0); }, 0);
+  const horaMedia = comHoras.length ? Math.round((horasTotal / comHoras.length) * 10) / 10 : 0;
+  const custoMedioPorHora = horasTotal > 0 ? Math.round((custoTotal / horasTotal) * 100) / 100 : 0;
+
+  // [NOVO 17/09] Quantidade de gás em kg — só conta trocas que informaram
+  // esse campo (opcional; trocas antigas ou sem essa info ficam de fora
+  // da soma, mas continuam contando normalmente em custo/quantidade).
+  const comKg = trocas.filter(function (t) { return t.QUANTIDADE_KG !== '' && t.QUANTIDADE_KG !== null && t.QUANTIDADE_KG !== undefined; });
+  const kgTotal = comKg.reduce(function (soma, t) { return soma + (Number(t.QUANTIDADE_KG) || 0); }, 0);
+  const custoMedioPorKg = kgTotal > 0 ? Math.round((custoTotal / kgTotal) * 100) / 100 : 0;
+
+  const custoPorFornecedor = {};
+  const trocasPorFornecedor = {};
+  const kgPorFornecedor = {};
+  trocas.forEach(function (t) {
+    const f = textoLimpo_(t.FORNECEDOR) || '(sem fornecedor)';
+    custoPorFornecedor[f] = (custoPorFornecedor[f] || 0) + (Number(t.CUSTO) || 0);
+    trocasPorFornecedor[f] = (trocasPorFornecedor[f] || 0) + 1;
+    if (t.QUANTIDADE_KG !== '' && t.QUANTIDADE_KG !== null && t.QUANTIDADE_KG !== undefined) {
+      kgPorFornecedor[f] = (kgPorFornecedor[f] || 0) + (Number(t.QUANTIDADE_KG) || 0);
+    }
+  });
+
+  // Agregado por frota, para os rankings (custo, horas acumuladas, custo/hora, kg).
+  const porFrota = {};
+  trocas.forEach(function (t) {
+    const chave = String(t.ID_EQUIPAMENTO);
+    if (!porFrota[chave]) {
+      porFrota[chave] = {
+        idEquipamento: t.ID_EQUIPAMENTO, nomeEquipamento: t.NOME_EQUIPAMENTO, unidade: t.UNIDADE,
+        custo: 0, horasTotal: 0, quantidadeComHoras: 0, quantidade: 0, kgTotal: 0, quantidadeComKg: 0
+      };
+    }
+    porFrota[chave].custo += (Number(t.CUSTO) || 0);
+    porFrota[chave].quantidade++;
+    if (t.HORAS_OPERACAO !== '' && t.HORAS_OPERACAO !== null && t.HORAS_OPERACAO !== undefined) {
+      porFrota[chave].horasTotal += (Number(t.HORAS_OPERACAO) || 0);
+      porFrota[chave].quantidadeComHoras++;
+    }
+    if (t.QUANTIDADE_KG !== '' && t.QUANTIDADE_KG !== null && t.QUANTIDADE_KG !== undefined) {
+      porFrota[chave].kgTotal += (Number(t.QUANTIDADE_KG) || 0);
+      porFrota[chave].quantidadeComKg++;
+    }
+  });
+  const frotas = Object.keys(porFrota).map(function (k) { return porFrota[k]; });
+
+  const rankingCustoPorFrota = frotas.slice()
+    .sort(function (a, b) { return b.custo - a.custo; })
+    .slice(0, 10)
+    .map(function (f) { return { idEquipamento: f.idEquipamento, nomeEquipamento: f.nomeEquipamento, custo: Math.round(f.custo * 100) / 100, quantidade: f.quantidade }; });
+
+  const rankingHorasPorFrota = frotas.slice()
+    .filter(function (f) { return f.quantidadeComHoras > 0; })
+    .sort(function (a, b) { return b.horasTotal - a.horasTotal; })
+    .slice(0, 10)
+    .map(function (f) { return { idEquipamento: f.idEquipamento, nomeEquipamento: f.nomeEquipamento, horasTotal: Math.round(f.horasTotal * 10) / 10, quantidade: f.quantidadeComHoras }; });
+
+  const rankingCustoPorHoraPorFrota = frotas.slice()
+    .filter(function (f) { return f.horasTotal > 0; })
+    .map(function (f) { return { idEquipamento: f.idEquipamento, nomeEquipamento: f.nomeEquipamento, custoPorHora: Math.round((f.custo / f.horasTotal) * 100) / 100 }; })
+    .sort(function (a, b) { return b.custoPorHora - a.custoPorHora; })
+    .slice(0, 10);
+
+  const rankingIntervaloMedioPorFrota = frotas.slice()
+    .filter(function (f) { return f.quantidadeComHoras > 0; })
+    .map(function (f) { return { idEquipamento: f.idEquipamento, nomeEquipamento: f.nomeEquipamento, horasMedia: Math.round((f.horasTotal / f.quantidadeComHoras) * 10) / 10, quantidade: f.quantidadeComHoras }; })
+    .sort(function (a, b) { return b.horasMedia - a.horasMedia; })
+    .slice(0, 10);
+
+  // [NOVO 17/09] Ranking de kg consumido por frota — só entra quem tem
+  // pelo menos uma troca com quantidade informada.
+  const rankingKgPorFrota = frotas.slice()
+    .filter(function (f) { return f.quantidadeComKg > 0; })
+    .sort(function (a, b) { return b.kgTotal - a.kgTotal; })
+    .slice(0, 10)
+    .map(function (f) { return { idEquipamento: f.idEquipamento, nomeEquipamento: f.nomeEquipamento, kgTotal: Math.round(f.kgTotal * 100) / 100, quantidade: f.quantidadeComKg }; });
+
+  // Tabela por frota completa (não só top 10) — usada no relatório geral
+  // unificado para cruzar custo de gás com horas de operação real.
+  const custoEKgPorFrota = frotas.map(function (f) {
+    return {
+      idEquipamento: f.idEquipamento, nomeEquipamento: f.nomeEquipamento, unidade: f.unidade,
+      custoTotal: Math.round(f.custo * 100) / 100,
+      kgTotal: f.quantidadeComKg > 0 ? Math.round(f.kgTotal * 100) / 100 : null,
+      quantidadeTrocas: f.quantidade,
+      // Horas que a máquina realmente rodou (horímetro), somadas das trocas do período.
+      horasOperacao: f.quantidadeComHoras > 0 ? Math.round(f.horasTotal * 10) / 10 : null
+    };
+  });
+
+  return {
+    unidade: ehTodasUnidades_(unidade) ? 'TODAS' : unidade,
+    geradoEm: nowIso_(),
+    periodo: { tipo: janela.tipo, label: janela.label, inicio: janela.inicio ? toIso_(janela.inicio) : '', fim: janela.fim ? toIso_(janela.fim) : '' },
+    indicadores: {
+      totalTrocas: trocas.length,
+      custoTotal: Math.round(custoTotal * 100) / 100,
+      custoMedioPorHora: custoMedioPorHora,
+      horaMedia: horaMedia,
+      kgTotal: Math.round(kgTotal * 100) / 100,
+      custoMedioPorKg: custoMedioPorKg
+    },
+    custoPorFornecedor: custoPorFornecedor,
+    trocasPorFornecedor: trocasPorFornecedor,
+    kgPorFornecedor: kgPorFornecedor,
+    rankingCustoPorFrota: rankingCustoPorFrota,
+    rankingHorasPorFrota: rankingHorasPorFrota,
+    rankingCustoPorHoraPorFrota: rankingCustoPorHoraPorFrota,
+    rankingIntervaloMedioPorFrota: rankingIntervaloMedioPorFrota,
+    rankingKgPorFrota: rankingKgPorFrota,
+    custoEKgPorFrota: custoEKgPorFrota,
+    trocas: trocas.sort(function (a, b) { return ordenarPorDataDesc_(a.DATA_HORA, b.DATA_HORA); })
+  };
+}
+
+// ======================= RELATÓRIO EXECUTIVO (Manutenção + Lavagem + Gás) =======================
+// Indicadores e gráficos de lavagem — a Lavagem não tinha relatório próprio
+// até aqui, só aparecia no Histórico. Esta função existe só para alimentar
+// o Relatório Executivo (não tem tela dedicada de "Relatório de Lavagem").
+
+function getIndicadoresLavagem_(params) {
+  const janela = resolverPeriodo_(Object.assign({ periodo: params.periodo || 'mes' }, params));
+  const rows = filtrarPorUnidade_(readSheet_(SHEETS.LAVAGENS), params.unidade)
+    .filter(function (l) { return dentroDoPeriodo_(l.DATA_HORA, janela); });
+  const comPendencia = rows.filter(function (l) { return String(l.STATUS) === 'pendencia'; }).length;
+  const semPendencia = rows.length - comPendencia;
+  return {
+    total: rows.length,
+    semPendencia: semPendencia,
+    comPendencia: comPendencia,
+    grafico: {
+      categorias: ['Sem pendência', 'Com pendência'],
+      valores: [semPendencia, comPendencia],
+      cores: ['#2F9E64', '#D64545']
+    }
+  };
+}
+
+// Junta os três relatórios já existentes (Manutenção/geral, Lavagem, Gás)
+// num único payload — é o que alimenta a tela e o PDF do Relatório Executivo.
+function getRelatorioExecutivo_(params) {
+  const relManut = getRelatorio_(params);
+  const relGas = getRelatorioGas_(params);
+  const lavagem = getIndicadoresLavagem_(params);
+  return {
+    unidade: relManut.unidade,
+    geradoEm: nowIso_(),
+    periodo: relManut.periodo,
+    manutencao: {
+      indicadores: relManut.indicadores,
+      statusFrota: relManut.statusFrota,
+      graficoManutencoesPorStatus: relManut.graficoManutencoesPorStatus,
+      graficoStatusFrota: relManut.graficoStatusFrota
+    },
+    lavagem: lavagem,
+    gas: {
+      indicadores: relGas.indicadores,
+      custoPorFornecedor: relGas.custoPorFornecedor,
+      trocasPorFornecedor: relGas.trocasPorFornecedor
+    },
+    // [EXECUTIVO OUT/2026] Visão por frota + pontos de atenção.
+    frotas: frotasDoExecutivo_(params, relManut, relGas),
+    // [OUT/2026 — 15/10] Prestadores e causa raiz.
+    analise: relManut.analise,
+    temposMedios: relManut.temposMedios
+  };
+}
+
+// [EXECUTIVO OUT/2026] O que a gestão pediu para o Relatório Executivo:
+// horas paradas por frota, quantidade de manutenções por frota, horas em
+// operação por frota e no total, trocas de gás, quem gastou/trocou mais
+// gás e se isso se explica por ter rodado mais, e os pontos de atenção.
+// Em "TODAS as unidades" o nome da frota vem com a unidade entre parênteses.
+function frotasDoExecutivo_(params, rel, gas) {
+  const todas = ehTodasUnidades_(params.unidade);
+  const nome = function (n, unidade) { return String(n || '—') + (todas && unidade ? ' (' + unidade + ')' : ''); };
+  const h1 = function (ms) { return Math.round(ms / 360000) / 10; }; // ms → horas com 1 casa
+
+  // ---- Horas paradas (manutenção + parada), dentro do expediente ----
+  const paradas = rel.horasPorMaquina
+    .filter(function (h) { return h.indisponibilidadeMs > 0; })
+    .sort(function (a, b) { return b.indisponibilidadeMs - a.indisponibilidadeMs; })
+    .map(function (h) {
+      return { frota: nome(h.nomeEquipamento, h.unidade), horas: h1(h.indisponibilidadeMs), texto: h.indisponibilidadeTexto,
+        manutencaoTexto: h.manutencaoTexto, paradoTexto: h.paradoTexto, disponibilidadePct: h.disponibilidadePct };
+    });
+
+  // ---- Quantidade de manutenções por frota ----
+  const unidadePorId = {};
+  rel.horasPorMaquina.forEach(function (h) { unidadePorId[String(h.idEquipamento)] = h.unidade; });
+  const manutencoes = rel.rankingQuantidadeManutencao.map(function (x) {
+    return { frota: nome(x.nomeEquipamento, unidadePorId[String(x.idEquipamento)]), quantidade: x.quantidadeManutencoes, tempoTexto: x.tempoTexto };
+  });
+
+  // ---- Horas em operação (horas rodadas do checklist) ----
+  const operacao = rel.horasPorMaquina
+    .filter(function (h) { return h.operacaoHoras !== null && h.operacaoHoras !== undefined; })
+    .sort(function (a, b) { return b.operacaoHoras - a.operacaoHoras; })
+    .map(function (h) { return { frota: nome(h.nomeEquipamento, h.unidade), horas: h.operacaoHoras, texto: h.operacaoTexto }; });
+
+  // ---- Gás por frota: quem gastou e trocou mais, e se rodou mais ----
+  const comHoras = gas.custoEKgPorFrota.filter(function (g) { return g.horasOperacao; });
+  const somaHoras = comHoras.reduce(function (t, g) { return t + g.horasOperacao; }, 0);
+  const somaCusto = comHoras.reduce(function (t, g) { return t + g.custoTotal; }, 0);
+  const mediaHoras = comHoras.length ? somaHoras / comHoras.length : 0;
+  const mediaCustoHora = somaHoras > 0 ? somaCusto / somaHoras : 0;
+  const gasPorFrota = gas.custoEKgPorFrota.slice()
+    .sort(function (a, b) { return b.custoTotal - a.custoTotal; })
+    .map(function (g) {
+      const custoHora = g.horasOperacao ? Math.round((g.custoTotal / g.horasOperacao) * 100) / 100 : null;
+      let veredito, atencao = false, rodouMais = null, curto;
+      if (!g.horasOperacao) {
+        veredito = 'Sem horímetro no período'; curto = 'Sem horímetro';
+      } else {
+        rodouMais = g.horasOperacao >= mediaHoras;
+        const caro = mediaCustoHora > 0 && custoHora > mediaCustoHora * 1.15;
+        if (rodouMais && !caro) { veredito = 'Rodou mais que a média; gasto proporcional'; curto = 'Sim, gasto proporcional'; }
+        else if (rodouMais && caro) { veredito = 'Rodou mais, mas com custo por hora acima da média'; curto = 'Sim, mas custo/h alto'; atencao = true; }
+        else if (caro) { veredito = 'Gastou mais sem rodar mais: verificar'; curto = 'Não: verificar'; atencao = true; }
+        else { veredito = 'Rodou menos que a média; gasto proporcional'; curto = 'Não, gasto proporcional'; }
+      }
+      return {
+        frota: nome(g.nomeEquipamento, g.unidade), trocas: g.quantidadeTrocas, custo: g.custoTotal, kg: g.kgTotal,
+        horas: g.horasOperacao, horasTexto: g.horasOperacao ? formatarHoras_(g.horasOperacao * 3600000) : '—',
+        custoPorHora: custoHora, rodouMais: rodouMais, veredito: veredito, vereditoCurto: curto, atencao: atencao
+      };
+    });
+  const maiorGasto = gasPorFrota[0] || null;
+  const maisTrocas = gasPorFrota.slice().sort(function (a, b) { return b.trocas - a.trocas; })[0] || null;
+
+  // ---- Pontos de atenção (regras fixas, sempre em cima dos números) ----
+  const ind = rel.indicadores, imp = rel.impacto, tm = rel.temposMedios;
+  const pontos = [];
+  const ponto = function (nivel, texto) { pontos.push({ nivel: nivel, texto: texto }); };
+  rel.equipamentosParados.slice(0, 5).forEach(function (e) {
+    ponto('alto', nome(e.nomeEquipamento, e.unidade) + ' está parada há ' + e.tempoTexto + (e.observacoes ? ' (' + e.observacoes + ')' : '') + '.');
+  });
+  if (imp.disponibilidadePct !== null && imp.disponibilidadePct < 90) {
+    ponto('alto', 'Disponibilidade da frota em ' + String(imp.disponibilidadePct).replace('.', ',') + '%: ' + imp.indisponibilidadeTexto + ' sem máquina no período (tempo corrido).');
+  }
+  if (paradas.length && paradas[0].horas > 0) {
+    ponto('medio', paradas[0].frota + ' foi a que mais ficou sem operar: ' + paradas[0].texto + ' (manutenção ' + paradas[0].manutencaoTexto + ', parada ' + paradas[0].paradoTexto + ').');
+  }
+  manutencoes.filter(function (m) { return m.quantidade >= 2; }).slice(0, 3).forEach(function (m) {
+    ponto('medio', m.frota + ' teve ' + m.quantidade + ' manutenções no período (' + m.tempoTexto + ' no total): avaliar causa repetida.');
+  });
+  if (ind.manutencoesAtivas > 0) {
+    ponto('medio', ind.manutencoesAtivas + ' chamado(s) aberto(s) no período ainda não finalizado(s) (' + ind.manutencoesAbertas + ' sem técnico acionado).');
+  }
+  if (tm.acionamentoMs !== null && tm.acionamentoMs > 30 * 60000) {
+    ponto('medio', 'O técnico leva em média ' + tm.acionamentoTexto + ' para ser acionado depois da abertura do chamado.');
+  }
+  gasPorFrota.filter(function (g) { return g.atencao; }).slice(0, 3).forEach(function (g) {
+    ponto('medio', g.frota + ': ' + g.veredito.charAt(0).toLowerCase() + g.veredito.slice(1) + ' (R$ ' + String(g.custoPorHora.toFixed(2)).replace('.', ',') +
+      '/h contra média de R$ ' + String(mediaCustoHora.toFixed(2)).replace('.', ',') + '/h).');
+  });
+  if (ind.naoConformidadesAbertas > 0) ponto('medio', ind.naoConformidadesAbertas + ' não conformidade(s) de checklist em aberto.');
+  if (ind.checklistsComPendencia > 0) ponto('baixo', ind.checklistsComPendencia + ' checklist(s) com pendência no período.');
+  const lav = getIndicadoresLavagem_(params);
+  if (lav.comPendencia > 0) ponto('baixo', lav.comPendencia + ' lavagem(ns) com pendência no período.');
+  (rel.analise && rel.analise.conclusoes || []).slice(0, 3).forEach(function (c) { ponto('medio', c); });
+  if (!pontos.length) ponto('ok', 'Nenhum ponto de atenção no período: sem máquina parada, sem chamado em aberto e disponibilidade acima de 90%.');
+
+  return {
+    expediente: imp.expediente,
+    paradasPorFrota: paradas,
+    horasParadasTotal: h1(imp.indisponibilidadeMs), horasParadasTotalTexto: imp.indisponibilidadeTexto,
+    horasManutencaoTotal: h1(imp.manutencaoMs), horasManutencaoTotalTexto: imp.manutencaoTexto,
+    manutencoesPorFrota: manutencoes,
+    operacaoPorFrota: operacao,
+    operacaoTotalHoras: imp.operacaoRealHoras, operacaoTotalTexto: imp.operacaoRealTexto, maquinasComHorimetro: imp.maquinasComHorimetro,
+    gasPorFrota: gasPorFrota,
+    gasTotalTrocas: gas.indicadores.totalTrocas, gasCustoTotal: gas.indicadores.custoTotal, gasKgTotal: gas.indicadores.kgTotal,
+    gasMediaHoras: Math.round(mediaHoras * 10) / 10, gasMediaCustoHora: Math.round(mediaCustoHora * 100) / 100,
+    maiorGasto: maiorGasto, maisTrocas: maisTrocas,
+    pontosDeAtencao: pontos
   };
 }
 
@@ -1841,7 +5449,8 @@ function severidade_(valor, limites) {
  */
 function gerarRelatorioPDF_(p) {
   const r = getRelatorio_(p);
-  const unidadeLabel = ehTodasUnidades_(p.unidade) ? 'Todas as unidades' : (p.unidade || '-');
+  const unidadeLabel = (ehTodasUnidades_(p.unidade) ? 'Todas as unidades' : (p.unidade || '-')) +
+    (SETOR_PEDIDO_ ? ' · ' + rotuloSetor_(SETOR_PEDIDO_) : '');
   const ind = r.indicadores;
 
   const pres = SlidesApp.create('tmp_relatorio_frota_' + new Date().getTime());
@@ -1898,10 +5507,10 @@ function gerarRelatorioPDF_(p) {
   const kpis = [
     ['Equipamentos', ind.totalEquipamentos, INK],
     ['Checklists', ind.checklistsRealizados, INK],
-    ['Manut. abertas', ind.manutencoesAbertas, VERMELHO],
-    ['Em andamento', ind.manutencoesAndamento, LARANJA],
+    ['Manut. ativas', ind.manutencoesAtivas, VERMELHO],
     ['Concluídas', ind.manutencoesConcluidas, VERDE],
-    ['NC abertas', ind.naoConformidadesAbertas, VERMELHO]
+    ['NC abertas', ind.naoConformidadesAbertas, VERMELHO],
+    ['Sem máquina (h)', Math.round(r.impacto.indisponibilidadeMs / 3600000), LARANJA]
   ];
   const kpiW = (PW - 80) / kpis.length - 6;
   let kx = 40;
@@ -1910,10 +5519,15 @@ function gerarRelatorioPDF_(p) {
     kx += kpiW + 6;
   });
   slideTexto_(slide,
-    'Equipamentos parados agora: ' + ind.equipamentosParadosAgora +
-    '   ·   Em manutenção agora: ' + ind.equipamentosEmManutencaoAgora +
-    '   ·   Não conformidades encerradas no período: ' + ind.naoConformidadesFechadas,
+    'Manutenções abertas: ' + ind.manutencoesAbertas + ' · Técnico acionado: ' + (ind.manutencoesAcionadas || 0) +
+    ' · Em andamento: ' + ind.manutencoesAndamento +
+    '   ·   Parados agora: ' + ind.equipamentosParadosAgora + '   ·   Em manutenção agora: ' + ind.equipamentosEmManutencaoAgora +
+    '   ·   NC encerradas no período: ' + ind.naoConformidadesFechadas,
     288, { size: 9.5, color: GRAY, italic: true, width: PW - 80, height: 20 });
+  slideTexto_(slide,
+    'Impacto no período: ' + r.impacto.indisponibilidadeTexto + ' de indisponibilidade da frota (manutenção ' + r.impacto.manutencaoTexto +
+    ' + parado ' + r.impacto.paradoTexto + ')   ·   ' + r.impacto.operacaoTexto + ' sem manutenção.',
+    306, { size: 9.5, color: GRAY, italic: true, width: PW - 80, height: 20 });
 
   // ---------- Slide 3: leitura gerencial dos indicadores ----------
   slide = slideNovo_(pres);
@@ -1921,8 +5535,7 @@ function gerarRelatorioPDF_(p) {
   slideTexto_(slide, 'Faixas de referência automáticas — devem ser revisadas pelo gestor antes de qualquer apresentação formal.', 66, { size: 10, color: GRAY, height: 22, width: PW - 80 });
 
   const indicadores = [
-    ['Manutenções abertas', ind.manutencoesAbertas, [0, 3]],
-    ['Manutenções em andamento', ind.manutencoesAndamento, [1, 4]],
+    ['Manutenções ativas (abertas + em andamento)', ind.manutencoesAtivas, [1, 4]],
     ['Não conformidades abertas', ind.naoConformidadesAbertas, [0, 3]],
     ['Checklists com pendência', ind.checklistsComPendencia, [0, 3]],
     ['Equipamentos parados agora', ind.equipamentosParadosAgora, [0, 2]],
@@ -2002,6 +5615,90 @@ function gerarRelatorioPDF_(p) {
     }
   }
 
+  // ---------- [NOVO 17/09] Ranking de QUANTIDADE de manutenções ----------
+  if (r.rankingQuantidadeManutencao.length) {
+    slide = slideNovo_(pres);
+    slideTitulo_(slide, 'Máquinas com mais manutenções', 30, {});
+    slideTexto_(slide, 'Quantas vezes cada equipamento precisou de manutenção no período — diferente do ranking anterior, que soma o TEMPO parado, este conta o NÚMERO de ocorrências.', 66, { size: 10, color: GRAY, height: 26, width: PW - 80 });
+
+    const topoQtd = r.rankingQuantidadeManutencao.slice(0, 8);
+    const linhasQtd = [['#', 'Equipamento', 'Tipo', 'Manutenções no período']].concat(
+      topoQtd.map(function (item, i) {
+        return [String(i + 1), item.nomeEquipamento + (item.codigo ? ' (' + item.codigo + ')' : ''),
+          item.tipo || '-', String(item.quantidadeManutencoes)];
+      })
+    );
+    slideTabela_(slide, linhasQtd, 104, {
+      width: PW - 80, height: 28 * linhasQtd.length,
+      corColuna: { 3: function (row, i) { return i === 1 ? VERMELHO : null; } }
+    });
+  }
+
+  // ---------- [NOVO 17/09] Impacto: horas sem máquina no período ----------
+  slide = slideNovo_(pres);
+  slideTitulo_(slide, 'Impacto — horas sem máquina no período', 30, {});
+  slideTexto_(slide, 'Calculado a partir do histórico de mudanças de status de cada equipamento (só cobre daqui pra frente — equipamentos sem histórico anterior usam o status atual como aproximação).', 66, { size: 10, color: GRAY, height: 26, width: PW - 80 });
+  const kpisImpacto = [
+    ['Indisponível (h)', Math.round(r.impacto.indisponibilidadeMs / 3600000 * 10) / 10, VERMELHO],
+    ['Em manutenção (h)', Math.round(r.impacto.manutencaoMs / 3600000 * 10) / 10, LARANJA],
+    ['Parado (h)', Math.round(r.impacto.paradoMs / 3600000 * 10) / 10, LARANJA],
+    ['Disponível (h)', Math.round(r.impacto.operacaoMs / 3600000 * 10) / 10, VERDE]
+  ];
+  let kxi = 40;
+  const kpiWi = (PW - 80) / kpisImpacto.length - 6;
+  kpisImpacto.forEach(function (k) {
+    slideBlocoKpi_(slide, kxi, 100, kpiWi, 70, k[1], k[0], k[2]);
+    kxi += kpiWi + 6;
+  });
+  const topoImpacto = r.horasPorMaquina.filter(function (h) { return h.indisponibilidadeMs > 0; }).slice(0, 8);
+  if (topoImpacto.length) {
+    const linhasImpacto = [['Equipamento', 'Em manutenção', 'Parado', 'Total indisponível', 'Disponível']].concat(
+      topoImpacto.map(function (h) {
+        return [h.nomeEquipamento + (h.codigo ? ' (' + h.codigo + ')' : ''), h.manutencaoTexto, h.paradoTexto, h.indisponibilidadeTexto, h.emUsoTexto];
+      })
+    );
+    slideTabela_(slide, linhasImpacto, 190, {
+      width: PW - 80, height: 28 * linhasImpacto.length, fontSize: 9.5,
+      corColuna: { 3: function () { return VERMELHO; } }
+    });
+  }
+
+  // ---------- [NOVO 17/09] Gás — custo, consumo e comparativo por máquina ----------
+  if (r.gas.indicadores.totalTrocas > 0) {
+    slide = slideNovo_(pres);
+    slideTitulo_(slide, 'Gás — custo e consumo por máquina', 30, {});
+    const gInd = r.gas.indicadores;
+    slideTexto_(slide,
+      r.gas.indicadores.totalTrocas + ' troca(s) no período — custo total ' + fmtMoedaGs_(gInd.custoTotal) +
+      (gInd.kgTotal > 0 ? '   ·   ' + gInd.kgTotal + ' kg no total (' + fmtMoedaGs_(gInd.custoMedioPorKg) + '/kg em média)' : '') + '.',
+      66, { size: 10, color: GRAY, height: 22, width: PW - 80 });
+
+    const topoGas = r.gas.custoEKgPorFrota.slice().sort(function (a, b) { return b.custoTotal - a.custoTotal; }).slice(0, 8);
+    const linhasGas = [['Equipamento', 'Trocas', 'Custo total', 'Kg total']].concat(
+      topoGas.map(function (g) {
+        return [g.nomeEquipamento, String(g.quantidadeTrocas), fmtMoedaGs_(g.custoTotal), g.kgTotal !== null ? String(g.kgTotal) : '-'];
+      })
+    );
+    slideTabela_(slide, linhasGas, 96, { width: PW - 80, height: 28 * linhasGas.length, fontSize: 9.5 });
+  }
+
+  if (r.comparativoCustoHorasOperacao.length) {
+    const comHoras = r.comparativoCustoHorasOperacao.filter(function (c) { return c.horasOperacao > 0; });
+    if (comHoras.length) {
+      slide = slideNovo_(pres);
+      slideTitulo_(slide, 'Comparativo: custo de gás × horas em operação', 30, {});
+      slideTexto_(slide, 'Custo de gás da máquina no período dividido pelas horas que ela realmente ficou "Em uso" (não é o mesmo cálculo do intervalo entre trocas do Relatório de Gás).', 66, { size: 10, color: GRAY, height: 26, width: PW - 80 });
+
+      const topoComp = comHoras.slice(0, 8);
+      const linhasComp = [['Equipamento', 'Custo gás', 'Horas em operação', 'Custo / hora']].concat(
+        topoComp.map(function (c) {
+          return [c.nomeEquipamento, fmtMoedaGs_(c.custoGasTotal), c.horasOperacao + 'h', c.custoPorHoraOperacao !== null ? fmtMoedaGs_(c.custoPorHoraOperacao) : '-'];
+        })
+      );
+      slideTabela_(slide, linhasComp, 100, { width: PW - 80, height: 28 * linhasComp.length, fontSize: 9.5 });
+    }
+  }
+
   // ---------- Equipamentos parados agora ----------
   if (r.equipamentosParados.length) {
     slide = slideNovo_(pres);
@@ -2050,8 +5747,10 @@ function gerarRelatorioPDF_(p) {
   if (ind.equipamentosParadosAgora > 0) {
     planoAcao.push(['Recolocar máquinas paradas em operação', 'Alta', 'Reduzir indisponibilidade de ' + ind.equipamentosParadosAgora + ' equipamento(s).']);
   }
-  if (ind.manutencoesAbertas > 0) {
-    planoAcao.push(['Iniciar manutenções ainda não começadas', 'Alta', ind.manutencoesAbertas + ' manutenção(ões) aguardando início.']);
+  const manutAguardando = (ind.manutencoesAbertas || 0) + (ind.manutencoesAcionadas || 0);
+  if (manutAguardando > 0) {
+    planoAcao.push(['Iniciar manutenções ainda não começadas', 'Alta', manutAguardando + ' manutenção(ões) aguardando início (' +
+      (ind.manutencoesAcionadas || 0) + ' com técnico já acionado).']);
   }
   if (ind.manutencoesAndamento > 0) {
     planoAcao.push(['Concluir manutenções em andamento', 'Média', 'Encerrar ' + ind.manutencoesAndamento + ' manutenção(ões) em execução.']);
@@ -2060,6 +5759,9 @@ function gerarRelatorioPDF_(p) {
     planoAcao.push(['Programar manutenções preventivas', 'Média', 'Nenhuma preventiva registrada no período.']);
   }
   planoAcao.push(['Manter o checklist diário da frota', 'Média', 'Garantir detecção precoce de falhas antes da quebra.']);
+
+  // [OUT/2026 — 15/10] Prestadores e causa raiz.
+  slidesAnaliseManutencao_(pres, r.analise);
 
   slide = slideNovo_(pres);
   slideTitulo_(slide, 'Plano de ação gerencial', 30, {});
@@ -2127,4 +5829,325 @@ function gerarRelatorioPDF_(p) {
     unidade: unidadeLabel,
     periodo: r.periodo
   };
+}
+
+// ======================= RELATÓRIO EXECUTIVO EM PDF =======================
+// Igual em técnica ao relatório de manutenção (Slides + fundo/logo ICC +
+// gráficos do serviço Charts), mas junta os três assuntos — Manutenção,
+// Lavagem e Troca de Gás — num resumo único pra apresentar à gestão.
+// Por pedido do Lucas, este PDF traz só indicadores e gráficos (sem
+// rankings nem tabelas detalhadas — essas continuam nos relatórios
+// individuais de cada assunto).
+
+function gerarRelatorioExecutivoPDF_(p) {
+  const r = getRelatorioExecutivo_(p);
+  const unidadeLabel = (ehTodasUnidades_(p.unidade) ? 'Todas as unidades' : (p.unidade || '-')) +
+    (SETOR_PEDIDO_ ? ' · ' + rotuloSetor_(SETOR_PEDIDO_) : '');
+  const mInd = r.manutencao.indicadores;
+  const lav = r.lavagem;
+  const gasInd = r.gas.indicadores;
+
+  const pres = SlidesApp.create('tmp_relatorio_executivo_' + new Date().getTime());
+  pres.getSlides()[0].remove();
+  const PW = pres.getPageWidth();
+  const PH = pres.getPageHeight();
+
+  const INK = '#171b1e', GRAY = '#6b7280', BRAND = '#5e9030', BRAND_DARK = '#436722';
+  const VERDE = '#2F9E64', LARANJA = '#DF8630', VERMELHO = '#D64545';
+
+  let slide;
+
+  // ---------- Slide 1: capa ----------
+  slide = slideNovo_(pres);
+  try {
+    const logoBytes = Utilities.base64Decode(LOGO_ICC_BASE64);
+    const logoBlob = Utilities.newBlob(logoBytes, 'image/png', 'logo.png');
+    const logo = slide.insertImage(logoBlob, 40, 40, 62, 62);
+    logo.setLeft(40).setTop(40);
+  } catch (e) { /* segue sem a logo se falhar */ }
+  slideTitulo_(slide, 'ICC BRAZIL', 128, { size: 16, color: BRAND_DARK, width: PW - 80 });
+  slideTitulo_(slide, 'Central de Frota', 160, { size: 40, color: INK, width: PW - 80 });
+  slideTitulo_(slide, 'Relatório executivo — Manutenção, Lavagem e Troca de Gás', 212, { size: 16, color: BRAND, width: PW - 80, height: 50 });
+  slideTexto_(slide, unidadeLabel + '   ·   ' + r.periodo.label, 262, { size: 13, color: INK, width: PW - 80 });
+  slideTexto_(slide, 'Gerado em ' + formatarDataHoraBr_(r.geradoEm), 284, { size: 11, color: GRAY, width: PW - 80 });
+
+  // ---------- Slide 2: sumário executivo ----------
+  slide = slideNovo_(pres);
+  slideTitulo_(slide, 'Sumário executivo', 30, {});
+
+  let sumario = 'No período analisado (' + r.periodo.label + '), a operação de ' + unidadeLabel +
+    ' contava com ' + mInd.totalEquipamentos + ' equipamento(s) cadastrado(s). Foram realizados ' +
+    mInd.checklistsRealizados + ' checklist(s) de manutenção e registradas ' + mInd.manutencoesTotal +
+    ' manutenção(ões) (' + mInd.manutencoesConcluidas + ' já concluída(s)). ';
+  sumario += 'Na frente de limpeza, foram feitas ' + lav.total + ' lavagem(ns) no período' +
+    (lav.comPendencia > 0 ? ', das quais ' + lav.comPendencia + ' com alguma pendência apontada.' : ', sem pendências apontadas.');
+  sumario += ' Já na troca de gás, foram registradas ' + gasInd.totalTrocas + ' troca(s), com custo total de ' +
+    fmtMoedaGs_(gasInd.custoTotal) + (gasInd.horaMedia ? (' e média de ' + gasInd.horaMedia + 'h de uso entre trocas.') : '.');
+  if (mInd.naoConformidadesAbertas > 0) {
+    sumario += ' Há ' + mInd.naoConformidadesAbertas + ' não conformidade(s) em aberto aguardando tratamento.';
+  }
+  // [EXECUTIVO OUT/2026]
+  const F = r.frotas;
+  sumario += ' A frota rodou ' + F.operacaoTotalTexto + ' no período (horas rodadas do checklist) e ficou ' +
+    F.horasParadasTotalTexto + ' sem operar, entre manutenção e parada.';
+  slideTexto_(slide, sumario, 68, { size: 11, height: 140, width: PW - 80 });
+
+  const kpis = [
+    ['Equipamentos', mInd.totalEquipamentos, INK],
+    // Em aberto = tudo que ainda não foi finalizado (aberta + técnico
+    // acionado + em andamento). Antes contava só o status "aberta", e um
+    // chamado com técnico já acionado sumia deste número.
+    ['Manut. em aberto', (mInd.manutencoesAbertas || 0) + (mInd.manutencoesAcionadas || 0) + (mInd.manutencoesAndamento || 0), VERMELHO],
+    ['Manut. concluídas', mInd.manutencoesConcluidas, VERDE],
+    ['Lavagens', lav.total, INK],
+    ['Lavagens c/ pendência', lav.comPendencia, lav.comPendencia > 0 ? VERMELHO : VERDE],
+    ['Trocas de gás', gasInd.totalTrocas, INK],
+    ['Custo gás no período', fmtMoedaGs_(gasInd.custoTotal), LARANJA]
+  ];
+  const kpiW = (PW - 80) / kpis.length - 6;
+  let kx = 40;
+  kpis.forEach(function (k) {
+    slideBlocoKpi_(slide, kx, 225, kpiW, 72, k[1], k[0], k[2]);
+    kx += kpiW + 6;
+  });
+
+  // ---------- Slides de gráfico ----------
+  function slideGrafico_(titulo, blob, nota, corNota) {
+    if (!blob) return;
+    const s = slideNovo_(pres);
+    slideTitulo_(s, titulo, 30, {});
+    const alturaDisponivel = PH - 80 - (nota ? 45 : 15);
+    const img = slideImagemCentralizada_(s, blob, 80, PW - 160, pres, alturaDisponivel);
+    if (nota && img) {
+      slideTexto_(s, nota, img.getTop() + img.getHeight() + 12, { size: 11, color: corNota || INK, bold: true, width: PW - 80 });
+    }
+  }
+
+  // ---------- [EXECUTIVO OUT/2026] Pontos de atenção e visão por frota ----------
+  // Cada slide fica dentro do seu próprio try: se um deles falhar, o PDF
+  // sai sem ele em vez de não sair.
+  const curto = function (t, nMax) { t = String(t); return t.length > nMax ? t.slice(0, nMax - 1) + '…' : t; };
+  const h1txt = function (v) { return String(v).replace('.', ','); };
+
+  try {
+    const NIVEL = { alto: 'ALTO', medio: 'MÉDIO', baixo: 'BAIXO', ok: 'OK' };
+    const COR_NIVEL = { alto: VERMELHO, medio: '#B45F06', baixo: GRAY, ok: VERDE };
+    const pts = F.pontosDeAtencao.slice(0, 8);
+    const s1 = slideNovo_(pres);
+    slideTitulo_(s1, 'Pontos de atenção', 30, {});
+    slideTabela_(s1, [['Ponto de atenção (montado automaticamente pelos números do período)']].concat(
+      pts.map(function (pt) { return [(NIVEL[pt.nivel] || '') + '  —  ' + curto(pt.texto, 170)]; })), 76, {
+      width: PW - 80, height: (pts.length + 1) * 32, fontSize: 9,
+      corColuna: { 0: function (linha, i) { return COR_NIVEL[pts[i - 1].nivel] || INK; } }
+    });
+    if (F.pontosDeAtencao.length > pts.length) {
+      slideTexto_(s1, 'Mostrando ' + pts.length + ' de ' + F.pontosDeAtencao.length + ' pontos. A lista completa está no app.', PH - 40, { size: 9, color: GRAY, width: PW - 80, height: 20 });
+    }
+  } catch (e) { /* segue sem este slide */ }
+
+  try {
+    const s2 = slideNovo_(pres);
+    slideTitulo_(s2, 'Frotas no período', 30, {});
+    const blocos = [
+      ['Horas totais em operação', F.operacaoTotalTexto, VERDE],
+      ['Horas totais em manutenção', F.horasManutencaoTotalTexto, LARANJA],
+      ['Trocas de gás', F.gasTotalTrocas, INK],
+      ['Gasto com gás', fmtMoedaGs_(F.gasCustoTotal), LARANJA]
+    ];
+    const bw = (PW - 80) / blocos.length - 8;
+    blocos.forEach(function (b, i) { slideBlocoKpi_(s2, 40 + i * (bw + 8), 84, bw, 72, b[1], b[0], b[2]); });
+    slideTexto_(s2, 'Horas em operação: horas rodadas do checklist — horímetro final menos inicial de cada checklist fechado no período (' + F.maquinasComHorimetro + ' máquina(s)). ' +
+      'Horas em manutenção: tempo com chamado de manutenção aberto, em tempo corrido (' + F.expediente + ').', 170, { size: 10, color: GRAY, width: PW - 80, height: 50 });
+    const destaques = [];
+    if (F.paradasPorFrota.length) destaques.push(['Mais tempo parada', curto(F.paradasPorFrota[0].frota, 34), F.paradasPorFrota[0].texto]);
+    if (F.manutencoesPorFrota.length) destaques.push(['Mais manutenções', curto(F.manutencoesPorFrota[0].frota, 34), F.manutencoesPorFrota[0].quantidade + ' chamado(s)']);
+    if (F.operacaoPorFrota.length) destaques.push(['Mais rodou', curto(F.operacaoPorFrota[0].frota, 34), F.operacaoPorFrota[0].texto]);
+    if (F.maiorGasto) destaques.push(['Mais gastou gás', curto(F.maiorGasto.frota, 34), fmtMoedaGs_(F.maiorGasto.custo)]);
+    if (F.maisTrocas) destaques.push(['Mais trocou gás', curto(F.maisTrocas.frota, 34), F.maisTrocas.trocas + ' troca(s)']);
+    if (destaques.length) {
+      slideTabela_(s2, [['Destaque', 'Frota', 'Valor']].concat(destaques), 222, { width: PW - 80, height: (destaques.length + 1) * 26, fontSize: 10 });
+    }
+  } catch (e) { /* segue sem este slide */ }
+
+  // Um gráfico de colunas por assunto, com as 8 maiores frotas.
+  const graficoPorFrota = function (titulo, itens, serie, cor, nota) {
+    if (!itens || !itens.length) return;
+    try {
+      const top = itens.slice(0, 8);
+      const blob = gerarGraficoBarras_(titulo, top.map(function (x) { return curto(x.rotulo, 20); }),
+        [{ nome: serie, valores: top.map(function (x) { return x.valor; }) }], [cor], 640);
+      slideGrafico_('Frotas · ' + titulo, blob, nota + (itens.length > top.length ? ' Mostrando as 8 maiores de ' + itens.length + '.' : ''), INK);
+    } catch (e) { /* gráfico é bônus */ }
+  };
+  graficoPorFrota('Frotas paradas, em horas',
+    F.paradasPorFrota.map(function (x) { return { rotulo: x.frota, valor: x.horas }; }), 'Horas paradas', VERMELHO,
+    F.horasParadasTotalTexto + ' sem operar no total (manutenção + parada, em tempo corrido).');
+  graficoPorFrota('Quantidade de manutenções por frota',
+    F.manutencoesPorFrota.map(function (x) { return { rotulo: x.frota, valor: x.quantidade }; }), 'Manutenções', LARANJA,
+    mInd.manutencoesTotal + ' manutenção(ões) aberta(s) no período.');
+  graficoPorFrota('Horas em operação por frota',
+    F.operacaoPorFrota.map(function (x) { return { rotulo: x.frota, valor: x.horas }; }), 'Horas rodadas', VERDE,
+    F.operacaoTotalTexto + ' rodadas no total, pelo horímetro do checklist.');
+  graficoPorFrota('Trocas de gás por frota',
+    F.gasPorFrota.slice().sort(function (a, b) { return b.trocas - a.trocas; }).map(function (x) { return { rotulo: x.frota, valor: x.trocas }; }), 'Trocas', '#3B82C4',
+    F.gasTotalTrocas + ' troca(s) de gás no período.');
+  graficoPorFrota('Gasto com gás por frota (R$)',
+    F.gasPorFrota.map(function (x) { return { rotulo: x.frota, valor: Math.round(x.custo) }; }), 'Gasto (R$)', LARANJA,
+    'Gasto total com gás: ' + fmtMoedaGs_(F.gasCustoTotal) + '.');
+
+  try {
+    if (F.gasPorFrota.length) {
+      const linhasGas = F.gasPorFrota.slice(0, 9);
+      const s3 = slideNovo_(pres);
+      slideTitulo_(s3, 'Gás · Quem gastou mais — e se rodou mais', 30, {});
+      slideTexto_(s3, 'Cada máquina comparada com a média da frota no período: ' + h1txt(F.gasMediaHoras) + ' h rodadas e ' +
+        fmtMoedaGs_(F.gasMediaCustoHora) + ' por hora.', 68, { size: 10, color: GRAY, width: PW - 80, height: 24 });
+      slideTabela_(s3, [['Frota', 'Trocas', 'Gasto', 'Horas rodadas', 'Custo por hora', 'Rodou mais?']].concat(linhasGas.map(function (g) {
+        return [curto(g.frota, 26), g.trocas, fmtMoedaGs_(g.custo), g.horasTexto, g.custoPorHora === null ? '—' : fmtMoedaGs_(g.custoPorHora), g.vereditoCurto];
+      })), 98, {
+        width: PW - 80, height: (linhasGas.length + 1) * 26, fontSize: 9,
+        corColuna: { 5: function (linha, i) { return linhasGas[i - 1].atencao ? VERMELHO : null; } }
+      });
+      if (F.gasPorFrota.length > linhasGas.length) {
+        slideTexto_(s3, 'Mostrando as 9 de maior gasto, de ' + F.gasPorFrota.length + ' máquinas.', PH - 40, { size: 9, color: GRAY, width: PW - 80, height: 20 });
+      }
+    }
+  } catch (e) { /* segue sem este slide */ }
+
+  // [OUT/2026 — 15/10] Prestadores e causa raiz.
+  slidesAnaliseManutencao_(pres, r.analise);
+
+  // ---- Manutenção ----
+  const g1 = r.manutencao.graficoManutencoesPorStatus;
+  if (g1.valores.some(function (v) { return v > 0; })) {
+    try {
+      const blob1 = gerarGraficoBarras_('Manutenções por status', g1.categorias,
+        [{ nome: 'Manutenções', valores: g1.valores }], ['#3B82C4']);
+      const pctConcluidas = mInd.manutencoesTotal > 0
+        ? Math.round(mInd.manutencoesConcluidas / mInd.manutencoesTotal * 100) : 0;
+      slideGrafico_('Manutenção · Manutenções por status', blob1,
+        mInd.manutencoesTotal + ' manutenção(ões) no período — ' + pctConcluidas + '% já concluída(s).',
+        pctConcluidas >= 70 ? VERDE : (pctConcluidas >= 40 ? LARANJA : VERMELHO));
+    } catch (e) { /* gráfico é bônus: se falhar, o relatório continua */ }
+  }
+
+  const g2 = r.manutencao.graficoStatusFrota;
+  if (g2.valores.some(function (v) { return v > 0; })) {
+    try {
+      const blob2 = gerarGraficoBarras_('Situação atual da frota', g2.categorias,
+        [{ nome: 'Equipamentos', valores: g2.valores }], ['#5e9030']);
+      const disponiveis = mInd.totalEquipamentos > 0
+        ? Math.round(r.manutencao.statusFrota.em_uso / mInd.totalEquipamentos * 100) : 0;
+      slideGrafico_('Manutenção · Situação atual da frota', blob2,
+        disponiveis + '% da frota está em uso neste momento.',
+        disponiveis >= 80 ? VERDE : (disponiveis >= 60 ? LARANJA : VERMELHO));
+    } catch (e) { /* */ }
+  }
+
+  // ---- Lavagem ----
+  if (lav.grafico.valores.some(function (v) { return v > 0; })) {
+    try {
+      const blob3 = gerarGraficoBarras_('Lavagens por resultado', lav.grafico.categorias,
+        [{ nome: 'Lavagens', valores: lav.grafico.valores }], ['#5e9030']);
+      const pctSemPendencia = lav.total > 0 ? Math.round(lav.semPendencia / lav.total * 100) : 0;
+      slideGrafico_('Lavagem · Resultado das lavagens', blob3,
+        lav.total + ' lavagem(ns) no período — ' + pctSemPendencia + '% sem pendência.',
+        pctSemPendencia >= 80 ? VERDE : (pctSemPendencia >= 50 ? LARANJA : VERMELHO));
+    } catch (e) { /* */ }
+  }
+
+  // ---- Troca de gás ----
+  const fornecedores = Object.keys(r.gas.custoPorFornecedor || {});
+  if (fornecedores.length) {
+    try {
+      const valoresCusto = fornecedores.map(function (f) { return r.gas.custoPorFornecedor[f]; });
+      const blob4 = gerarGraficoBarras_('Custo de gás por fornecedor', fornecedores,
+        [{ nome: 'Custo (R$)', valores: valoresCusto }], ['#DF8630']);
+      slideGrafico_('Troca de gás · Custo por fornecedor', blob4,
+        gasInd.totalTrocas + ' troca(s) no período — custo total ' + fmtMoedaGs_(gasInd.custoTotal) + '.',
+        INK);
+    } catch (e) { /* */ }
+  }
+
+  // ---------- Fechamento ----------
+  slide = slideNovo_(pres);
+  slideTexto_(slide, 'Documento gerado automaticamente pelo app Central de Frota — ICC Brazil.', 190, { size: 11, color: GRAY, width: PW - 80 });
+  slideTexto_(slide, 'Resumo executivo combinando Manutenção, Lavagem e Troca de Gás. Para o detalhe de cada assunto (rankings, tabelas e histórico completo), use os relatórios individuais no app.', 214, { size: 10, color: GRAY, width: PW - 80, height: 40 });
+
+  pres.saveAndClose();
+
+  const arquivoSlides = DriveApp.getFileById(pres.getId());
+  const pdfBlob = arquivoSlides.getAs('application/pdf');
+  const nomeArquivo = 'relatorio_executivo_' +
+    String(unidadeLabel).replace(/\s+/g, '_') + '_' +
+    Utilities.formatDate(new Date(), fusoHorario_(), 'yyyy-MM-dd_HHmm') + '.pdf';
+  pdfBlob.setName(nomeArquivo);
+
+  const base64 = Utilities.base64Encode(pdfBlob.getBytes());
+
+  let url = '';
+  try {
+    const pastaRelatorios = pastaPorNome_(FOLDER_RELATORIOS);
+    const pdfFile = pastaRelatorios.createFile(pdfBlob);
+    pdfFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    url = pdfFile.getUrl();
+  } catch (e) { /* se o arquivamento falhar, o download por base64 ainda funciona */ }
+
+  arquivoSlides.setTrashed(true);
+
+  return {
+    base64: base64,
+    filename: nomeArquivo,
+    url: url,
+    unidade: unidadeLabel,
+    periodo: r.periodo
+  };
+}
+
+function fmtMoedaGs_(v) {
+  return 'R$ ' + (Math.round((Number(v) || 0) * 100) / 100).toFixed(2).replace('.', ',');
+}
+
+// ======================= [OUT/2026] RESUMO DIÁRIO DE CHECKLISTS PENDENTES =======================
+// Manda, por unidade, um e-mail para a lista de CONFIG_EMAILS_MANUTENCAO
+// com os equipamentos "Em uso" que ainda não fizeram o checklist do dia.
+// Não envia aos domingos nem quando não há pendência.
+function enviarResumoChecklistsPendentes() {
+  if (new Date().getDay() === 0) return;
+  getUnidades_().forEach(function (u) {
+    try {
+      const emails = getEmailsNotificacao_(u.UNIDADE);
+      if (!emails.length) return;
+      const painel = getPainelCalcular_({ unidade: u.UNIDADE });
+      const pendentes = painel.checklistDoDia.filter(function (c) { return !c.FEITO; });
+      if (!pendentes.length) return;
+      const resumo = painel.checklistDoDiaResumo;
+      MailApp.sendEmail({
+        to: emails.join(','),
+        subject: '[Central de Frota] ' + pendentes.length + ' checklist(s) pendente(s) hoje — ' + u.UNIDADE,
+        body: 'Checklist do dia em ' + u.UNIDADE + ': ' + resumo.feitos + ' feito(s) de ' + resumo.total + '.\n\n' +
+          'Ainda sem checklist hoje:\n' +
+          pendentes.map(function (c) { return '- ' + c.NOME + (c.CODIGO ? ' (' + c.CODIGO + ')' : ''); }).join('\n') +
+          '\n\nAcesse o app Central de Frota para acompanhar.'
+      });
+    } catch (e) { /* uma unidade com problema não impede as outras */ }
+  });
+}
+
+// Rode UMA VEZ pelo editor (▶ Executar) para ligar o envio diário às 10h.
+// Rodar de novo só recria o agendamento (não duplica).
+function instalarResumoDiarioChecklists() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'enviarResumoChecklistsPendentes') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('enviarResumoChecklistsPendentes').timeBased().everyDays(1).atHour(10).create();
+  return 'Resumo diário de checklists pendentes agendado para as 10h.';
+}
+
+// Para desligar o envio diário.
+function removerResumoDiarioChecklists() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'enviarResumoChecklistsPendentes') ScriptApp.deleteTrigger(t);
+  });
+  return 'Resumo diário desligado.';
 }

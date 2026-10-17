@@ -1390,6 +1390,40 @@ async function renderVisaoGeralUnidades() {
     btnPdf.innerHTML = '📄 Emitir relatório de todas as unidades';
   };
 
+  // [SEGURANÇA OUT/2026] Checklists de todas as unidades num PDF só (coordenador
+  // de segurança / gerente), por setor ou com os dois setores juntos.
+  const segCard = el('<div class="card stack" style="gap:10px"></div>');
+  app.appendChild(segCard);
+  segCard.appendChild(el('<h3 class="title-lg" style="font-size:15px">🦺 Checklists de segurança — todas as unidades</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Todos os checklists realizados, das unidades e setores juntos ou separados</p>'));
+  const segSetor = seletorSetorPdf(segCard);
+  const segStatus = selectField(segCard, {
+    label: 'Resultado', semVazio: true, value: '',
+    options: [{ value: '', label: 'Todos os resultados' }, { value: 'pendencia', label: 'Com pendência' }, { value: 'ok', label: 'Sem pendência' }]
+  });
+  const segPeriodo = filtroPeriodo(segCard, { comTodos: true, value: 'mes' });
+  const btnSeg = el('<button class="btn btn--accent btn--block">📄 Baixar PDF de checklists (todas as unidades)</button>');
+  segCard.appendChild(btnSeg);
+  btnSeg.onclick = async function () {
+    const rotulo = btnSeg.textContent;
+    btnSeg.disabled = true; btnSeg.textContent = 'Gerando PDF…';
+    toast('Gerando o PDF com gráficos — com todas as unidades pode levar até 2 minutos, não feche a tela…');
+    try {
+      const per = segPeriodo.getValue();
+      const res = await api('gerarChecklistsPDF', {
+        unidade: 'TODAS',
+        setor: segSetor.getValue(),
+        periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim,
+        status: segStatus.getValue() || undefined,
+        idUsuario: S.usuario.ID_USUARIO,
+        geradoPor: S.usuario.NOME
+      });
+      downloadBase64File(res.filename, res.base64, 'application/pdf');
+      toast('PDF de checklists baixado.', false, true);
+    } catch (e) { /* toast já mostrado pelo api() */ }
+    btnSeg.disabled = false; btnSeg.textContent = rotulo;
+  };
+
   const body = el('<div class="stack" style="margin-top:2px"><p class="subtle">Carregando comparativo das unidades…</p></div>');
   app.appendChild(body);
   // [EXECUTIVO OUT/2026] Visão executiva da gestão: as frotas das três
@@ -2223,6 +2257,25 @@ async function renderPainel() {
 
 // ------------------------- CHECKLIST -------------------------
 
+// [SEGURANÇA OUT/2026] Seletor "Setor do PDF" — Fábrica, Operação ou os
+// dois juntos. Só aparece para quem tem acesso aos dois setores (SETOR em
+// branco na planilha). Usuário preso a um setor emite sempre o dele.
+// getValue() devolve o valor a mandar em `setor` ('TODOS' = os dois).
+function seletorSetorPdf(container) {
+  if (S.usuario && S.usuario.SETOR) {
+    return { getValue: function () { return String(S.usuario.SETOR).toUpperCase(); } };
+  }
+  const opcoes = Object.keys(SETORES).map(function (k) {
+    return { value: k, label: SETORES[k].ic + ' ' + SETORES[k].label };
+  }).concat([{ value: 'TODOS', label: '🏭🚜 Os dois setores juntos' }]);
+  const sel = selectField(container, {
+    label: 'Setor do PDF', semVazio: true, options: opcoes,
+    value: S.setor || 'TODOS',
+    hint: 'Escolha um setor ou emita os dois no mesmo PDF.'
+  });
+  return { getValue: function () { return sel.getValue() || 'TODOS'; } };
+}
+
 async function renderChecklists() {
   appendHtml(app, screenHeader('Checklist', 'Checklists da frota', 'Inspeção diária dos equipamentos'));
 
@@ -2254,6 +2307,9 @@ async function renderChecklists() {
   // [OUT/2026] PDF dos checklists realizados (segurança) — administrador.
   // Usa os mesmos filtros que estão na tela (período, resultado, equipamento).
   if (ehAdmin()) {
+    const setorPdfWrap = el('<div style="margin-top:12px"></div>');
+    app.appendChild(setorPdfWrap);
+    const setorPdf = seletorSetorPdf(setorPdfWrap);
     const btnPdf = el('<button class="btn btn--accent btn--block" style="margin-top:12px">📄 Baixar PDF de checklists (segurança)</button>');
     btnPdf.onclick = async function () {
       const rotulo = btnPdf.textContent;
@@ -2263,6 +2319,7 @@ async function renderChecklists() {
         const per = periodo.getValue();
         const res = await api('gerarChecklistsPDF', {
           unidade: S.unidade.UNIDADE,
+          setor: setorPdf.getValue(),
           periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim,
           status: document.getElementById('fStatus').value || undefined,
           idEquipamento: document.getElementById('fEquip').value || undefined,
