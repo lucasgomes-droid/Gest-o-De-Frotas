@@ -114,6 +114,7 @@ const ACOES_LENTAS_TIMEOUT_MS = {
   createLavagem: 70000,
   createManutencao: 70000,
   gerarManutencaoPDF: 120000,
+  gerarChecklistsPDF: 150000,
   getPrestadores: 60000,
   gerarPrestadoresPDF: 120000
 };
@@ -2249,6 +2250,32 @@ async function renderChecklists() {
   const periodoWrap = el('<div style="margin-top:8px"></div>');
   app.appendChild(periodoWrap);
   const periodo = filtroPeriodo(periodoWrap, { comTodos: true, value: 'mes', onChange: function () { load(); } });
+
+  // [OUT/2026] PDF dos checklists realizados (segurança) — administrador.
+  // Usa os mesmos filtros que estão na tela (período, resultado, equipamento).
+  if (ehAdmin()) {
+    const btnPdf = el('<button class="btn btn--accent btn--block" style="margin-top:12px">📄 Baixar PDF de checklists (segurança)</button>');
+    btnPdf.onclick = async function () {
+      const rotulo = btnPdf.textContent;
+      btnPdf.disabled = true; btnPdf.textContent = 'Gerando PDF…';
+      toast('Gerando o PDF com gráficos — pode levar até 1-2 minutos, não feche a tela…');
+      try {
+        const per = periodo.getValue();
+        const res = await api('gerarChecklistsPDF', {
+          unidade: S.unidade.UNIDADE,
+          periodo: per.periodo, dataInicio: per.dataInicio, dataFim: per.dataFim,
+          status: document.getElementById('fStatus').value || undefined,
+          idEquipamento: document.getElementById('fEquip').value || undefined,
+          idUsuario: S.usuario.ID_USUARIO,
+          geradoPor: S.usuario.NOME
+        });
+        downloadBase64File(res.filename, res.base64, 'application/pdf');
+        toast('PDF de checklists baixado.', false, true);
+      } catch (e) { /* toast já mostrado pelo api() */ }
+      btnPdf.disabled = false; btnPdf.textContent = rotulo;
+    };
+    app.appendChild(btnPdf);
+  }
 
   const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando…</p></div>');
   app.appendChild(body);
