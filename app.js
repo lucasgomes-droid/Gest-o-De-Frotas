@@ -3584,6 +3584,36 @@ async function renderManutencaoForm() {
   });
   if (editando) selEquip.select.disabled = true; // o backend não troca o equipamento de uma manutenção
 
+  // [19/10] Máquina com não conformidade em aberto: o chamado novo já sai
+  // ligado a ela (a NC acompanha o chamado e fecha quando ele finalizar).
+  const ncsWrap = el('<div class="note warn stack" style="gap:6px" hidden></div>');
+  let ncsChecks = [];
+  if (!editando) {
+    card.appendChild(ncsWrap);
+    const idsDaOrigem = String(pre.descricao || '').match(/NC-\d+/g) || [];
+    const carregarNcs = async function () {
+      const id = selEquip.getValue();
+      ncsChecks = []; ncsWrap.hidden = true; ncsWrap.innerHTML = '';
+      if (!id) return;
+      const lista = await api('getPendenciasEquipamento', { idEquipamento: id }).catch(function () { return []; });
+      if (selEquip.getValue() !== id || !lista || !lista.length) return;
+      ncsWrap.appendChild(el('<strong>⚠️ Esta máquina tem não conformidade em aberto</strong>'));
+      ncsWrap.appendChild(el('<span>Marque as que este chamado vai resolver: elas passam a acompanhar o chamado e fecham sozinhas quando ele for finalizado.</span>'));
+      lista.forEach(function (nc) {
+        const marcada = !idsDaOrigem.length || idsDaOrigem.indexOf(nc.idNc) > -1;
+        const lab = el('<label class="row" style="gap:8px;align-items:flex-start;cursor:pointer">' +
+          '<input type="checkbox"' + (marcada ? ' checked' : '') + ' style="width:auto;margin-top:3px">' +
+          '<span><strong class="mono">' + escapeHtml(nc.idNc) + '</strong> · ' + escapeHtml(nc.item) +
+          (nc.descricao ? ' — ' + escapeHtml(nc.descricao) : '') + '</span></label>');
+        ncsChecks.push({ id: nc.idNc, input: lab.querySelector('input') });
+        ncsWrap.appendChild(lab);
+      });
+      ncsWrap.hidden = false;
+    };
+    selEquip.select.addEventListener('change', carregarNcs);
+    carregarNcs();
+  }
+
   const selTipo = selectField(card, {
     label: 'Tipo', required: true, semVazio: true,
     value: editando ? m.TIPO : 'corretiva',
@@ -3740,6 +3770,11 @@ async function renderManutencaoForm() {
       horimetro: horManut && horManut.getValue() ? horManut.getValue() : undefined,
       fotos: !editando && fotos.length ? fotos : undefined
     };
+    if (!editando) {
+      const novas = ncsChecks.filter(function (c) { return c.input.checked && payload.descricao.indexOf(c.id) === -1; })
+        .map(function (c) { return c.id; });
+      if (novas.length) payload.descricao = (payload.descricao ? payload.descricao + ' ' : '') + '(origem: não conformidade ' + novas.join(', ') + ')';
+    }
     if (camposDatas) {
       Object.keys(camposDatas).forEach(function (k) {
         const v = camposDatas[k].campo.getValue();
@@ -4431,8 +4466,14 @@ async function renderNaoConformidades() {
       // Depois que uma manutenção é aberta para a NC, o status dela
       // acompanha o chamado: manutenção aberta → técnico acionado → em
       // manutenção → manutenção finalizada.
-      const etapaNc = aberta ? FLUXO_NC_MANUTENCAO[nc.STATUS_MANUTENCAO] : null;
-      const manutAtiva = !!etapaNc && nc.STATUS_MANUTENCAO !== 'concluida';
+      // [19/10] ligada = o chamado foi aberto para esta NC (fecha junto).
+      // Não ligada = a máquina já está com outro chamado em aberto: não
+      // oferece abrir mais um, oferece ligar a NC a ele.
+      const ligada = nc.MANUTENCAO_LIGADA !== false;
+      const temManut = aberta && !!nc.ID_MANUTENCAO;
+      const etapaNc = temManut && ligada ? FLUXO_NC_MANUTENCAO[nc.STATUS_MANUTENCAO] : null;
+      const soNaMaquina = temManut && !ligada;
+      const manutAtiva = temManut && nc.STATUS_MANUTENCAO !== 'concluida';
       const emDestaque = ncDestaque && String(nc.ID_NC) === String(ncDestaque);
       const card = el('<div class="card stack" style="gap:10px' + (aberta ? ';border-left:4px solid var(--st-risco)' : '') +
         (emDestaque ? ';outline:2px solid var(--brand);outline-offset:2px' : '') + '"></div>');
@@ -4440,8 +4481,8 @@ async function renderNaoConformidades() {
       appendHtml(card,
         '<div class="row between" style="gap:8px">' +
           '<span class="shiplabel">' + escapeHtml(nc.ID_NC) + '</span>' +
-          '<span class="tag tag--' + (etapaNc ? etapaNc.cls : aberta ? 'aberta' : 'concluida') + '">' +
-            (etapaNc ? etapaNc.label : aberta ? 'Aberta' : 'Fechada') + '</span>' +
+          '<span class="tag tag--' + (etapaNc ? etapaNc.cls : soNaMaquina ? 'andamento' : aberta ? 'aberta' : 'concluida') + '">' +
+            (etapaNc ? etapaNc.label : soNaMaquina ? 'Máquina em manutenção' : aberta ? 'Aberta' : 'Fechada') + '</span>' +
         '</div>' +
         '<div><strong style="font-size:15px">' + escapeHtml(nc.ITEM) + '</strong>' +
         '<div class="subtle">' + escapeHtml(nc.NOME_EQUIPAMENTO) + '</div></div>' +
@@ -4450,7 +4491,10 @@ async function renderNaoConformidades() {
         (nc.FECHADA_EM ? linhaInfo('Fechada em', fmtDataHora(nc.FECHADA_EM)) : '') +
         linhaInfo(aberta ? 'Tempo em aberto' : 'Tempo até o fechamento', '<strong class="mono">' + escapeHtml(nc.TEMPO_ABERTA_TEXTO || '—') + '</strong>') +
         (nc.ID_CHECKLIST_ORIGEM ? linhaInfo('Checklist de origem', '<span class="mono">' + escapeHtml(nc.ID_CHECKLIST_ORIGEM) + '</span>') : '') +
-        (nc.ID_MANUTENCAO ? linhaInfo('Manutenção', '<span class="mono">' + escapeHtml(nc.ID_MANUTENCAO) + '</span>') : '')
+        (nc.ID_MANUTENCAO ? linhaInfo('Manutenção', '<span class="mono">' + escapeHtml(nc.ID_MANUTENCAO) + '</span>' +
+          (soNaMaquina && nc.TITULO_MANUTENCAO ? '<div class="subtle">' + escapeHtml(nc.TITULO_MANUTENCAO) + '</div>' : '')) : '') +
+        (soNaMaquina ? '<div class="note warn">A máquina já está com o chamado <strong>' + escapeHtml(nc.ID_MANUTENCAO) +
+          '</strong> em aberto, mas ele não está ligado a esta não conformidade. Ligue para ela acompanhar o chamado e fechar sozinha quando ele for finalizado.</div>' : '')
       );
       if (nc.FOTO) card.appendChild(el('<div>' + fotoSalva(nc.FOTO, 'Problema') + '</div>'));
 
@@ -4472,9 +4516,25 @@ async function renderNaoConformidades() {
         }
       };
       card.appendChild(btn);
+      if (soNaMaquina && manutAtiva) {
+        const btnLigar = el('<button class="btn btn--accent btn--block">🔗 Ligar ao chamado ' + escapeHtml(nc.ID_MANUTENCAO) + '</button>');
+        btnLigar.onclick = async function () {
+          btnLigar.disabled = true; btnLigar.textContent = 'Ligando…';
+          try {
+            await api('updateManutencao', {
+              idManutencao: nc.ID_MANUTENCAO,
+              idUsuario: S.usuario.ID_USUARIO,
+              descricao: (nc.DESCRICAO_MANUTENCAO ? nc.DESCRICAO_MANUTENCAO + ' ' : '') + '(origem: não conformidade ' + nc.ID_NC + ')'
+            });
+            toast(nc.ID_NC + ' ligada ao chamado ' + nc.ID_MANUTENCAO + '.', false, true);
+            load();
+          } catch (err) { btnLigar.disabled = false; btnLigar.textContent = '🔗 Ligar ao chamado ' + nc.ID_MANUTENCAO; }
+        };
+        card.appendChild(btnLigar);
+      }
       if (aberta && manutAtiva) {
-        const btnVer = el('<button class="btn btn--outline btn--block">🔧 Ver na aba Manutenções</button>');
-        btnVer.onclick = function () { go('manutencoes'); };
+        const btnVer = el('<button class="btn btn--outline btn--block">🔧 Ver o chamado ' + escapeHtml(nc.ID_MANUTENCAO) + '</button>');
+        btnVer.onclick = function () { abrirManutencaoDaFrota(nc.ID_EQUIPAMENTO); };
         card.appendChild(btnVer);
       }
       if (aberta && !manutAtiva) {
