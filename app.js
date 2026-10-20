@@ -1690,6 +1690,65 @@ async function montarChecklistsEmAberto(card) {
   });
 }
 
+// [19/10] Card do Admin: checklists que ainda não foram fechados, com o
+// prazo do turno. Vencidos em vermelho (mais atrasado primeiro); os do
+// turno em curso em amarelo. O Admin pode fechar ali mesmo.
+function montarPendenciasFechamento(body, d) {
+  const lista = d.pendenciasFechamento;
+  const atrasados = lista.filter(function (p) { return p.ATRASADO; });
+  const noPrazo = lista.filter(function (p) { return !p.ATRASADO; });
+  const card = el('<div class="card stack"' + (atrasados.length ? ' style="border-left:4px solid var(--st-risco)"' : '') + '>' +
+    '<h3 class="title-lg">⏱️ Pendências de fechamento de checklist</h3>' +
+    '<p class="subtle" style="margin-top:-6px">' + atrasados.length + ' fora do prazo · ' + noPrazo.length + ' no turno em curso<br>' +
+    escapeHtml((d.turnosFechamento || []).join(' · ')) + '</p></div>');
+  body.appendChild(card);
+  if (!lista.length) {
+    card.appendChild(el('<p class="subtle">Nenhum checklist aguardando fechamento. 👍</p>'));
+    return;
+  }
+  lista.forEach(function (p) {
+    const box = el('<div class="stack" style="gap:8px"></div>');
+    const linha = el(
+      '<button type="button" class="list-item ' + (p.ATRASADO ? 'is-alert' : 'is-warn') + '" style="width:100%">' +
+        '<span><span class="list-item__title">' + escapeHtml(p.NOME_EQUIPAMENTO) + '</span>' +
+        '<div class="list-item__sub">' + escapeHtml(p.TURNO_ROTULO) + ' · ' + escapeHtml(p.RESPONSAVEL || '—') +
+        ' · aberto ' + fmtDataHora(p.DATA_HORA) + ' · prazo ' + fmtDataHora(p.PRAZO) + '</div></span>' +
+        '<span class="tag ' + (p.ATRASADO ? 'tag--nok' : 'tag--andamento') + '">' +
+          (p.ATRASADO ? 'Atrasado ' + escapeHtml(p.TEMPO_TEXTO) : 'Faltam ' + escapeHtml(p.TEMPO_TEXTO)) + '</span>' +
+      '</button>');
+    const area = el('<div class="stack" style="gap:8px;padding:0 4px 8px" hidden></div>');
+    linha.onclick = function () {
+      area.hidden = !area.hidden;
+      if (area.hidden || area.childElementCount) return;
+      area.appendChild(el('<p class="subtle">' + escapeHtml(p.ID_CHECKLIST) +
+        (temValorCampo(p.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(p.HORIMETRO_INICIAL) : '') + '</p>'));
+      const campo = textField(area, { label: 'Horímetro final', required: true, type: 'text', placeholder: 'Ex: 09540' });
+      campo.input.setAttribute('inputmode', 'numeric');
+      campo.input.addEventListener('input', function () {
+        const limpo = campo.input.value.replace(/[^0-9]/g, '');
+        if (limpo !== campo.input.value) campo.input.value = limpo;
+      });
+      const btn = el('<button class="btn btn--primary btn--block">✓ Fechar checklist</button>');
+      area.appendChild(btn);
+      btn.onclick = async function () {
+        if (!campo.getValue()) { toast('Informe o horímetro final', true); return; }
+        if (temValorCampo(p.HORIMETRO_INICIAL) && Number(campo.getValue()) < Number(p.HORIMETRO_INICIAL)) {
+          toast('O horímetro final não pode ser menor que o inicial (' + p.HORIMETRO_INICIAL + ')', true); return;
+        }
+        btn.disabled = true; btn.textContent = 'Fechando…';
+        try {
+          await api('closeChecklist', { idChecklist: p.ID_CHECKLIST, horimetroFinal: campo.getValue(), idUsuario: S.usuario.ID_USUARIO });
+          toast('Checklist ' + p.ID_CHECKLIST + ' fechado.', false, true);
+          box.remove();
+        } catch (e) { btn.disabled = false; btn.textContent = '✓ Fechar checklist'; }
+      };
+    };
+    box.appendChild(linha);
+    box.appendChild(area);
+    card.appendChild(box);
+  });
+}
+
 // ------------------------- HORAS RODADAS -------------------------
 // Tempo que cada máquina rodou, calculado pelo checklist: horímetro final
 // (fechamento) − horímetro inicial (abertura). Cada checklist fechado é um
@@ -2127,6 +2186,9 @@ async function renderPainel() {
       kpi(ind.manutencoesAbertas + (ind.manutencoesAcionadas || 0) + ind.manutencoesAndamento, 'Manutenções ativas', 'kpi--accent') +
     '</div>'
   ));
+
+  // ---- [19/10] Pendências de fechamento de checklist (Admin) ----
+  if (ehAdmin() && Array.isArray(d.pendenciasFechamento)) montarPendenciasFechamento(body, d);
 
   // ---- Meus checklists em aberto (fechar com o horímetro final) ----
   const cardFechar = el('<div class="card stack" hidden></div>');
@@ -5511,7 +5573,7 @@ function renderMais() {
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
       menuCard('⏱️', 'Horas rodadas', 'Tempo que cada máquina rodou, pelo horímetro do checklist', 'horasRodadas') +
       menuCard('📝', 'Perguntas', 'Perguntas do checklist e da lavagem, por tipo de equipamento', 'perguntas') +
-      menuCard('⚙️', 'Configurações', 'Responsáveis do checklist, usuários e unidades', 'configuracoes') +
+      menuCard('👥', 'Usuários', 'Criar e remover logins de administrador e operador', 'configuracoes') +
     '</div>'
   );
   bindMenuCards();
@@ -5520,105 +5582,138 @@ function renderMais() {
 
 // ------------------------- CONFIGURAÇÕES (ADMIN) -------------------------
 
+// [20/10] Gestão de usuários. O admin cria e remove logins (Administrador
+// ou Operador) da PRÓPRIA unidade; quem tem acesso a TODAS escolhe a
+// unidade. O servidor confere tudo de novo — esta tela só facilita.
 async function renderConfiguracoes() {
-  appendHtml(app, screenHeader('Configurações', 'Configurações', 'Unidade ' + S.unidade.UNIDADE));
+  const ehGeral = String(S.usuario.UNIDADE || '').trim().toUpperCase() === 'TODAS';
+  appendHtml(app, screenHeader('Usuários', 'Usuários', 'Logins da unidade ' + S.unidade.UNIDADE));
   app.appendChild(botaoVoltar('mais'));
 
-  // ---- Responsáveis do checklist ----
-  const cardResp = el('<div class="card stack"><h3 class="title-lg">Responsáveis do checklist</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Lista fechada de nomes que aparece no campo "Responsável" do checklist.</p></div>');
-  app.appendChild(cardResp);
+  // ---- Novo usuário ----
+  const cardNovo = el('<div class="card stack"><h3 class="title-lg">＋ Novo usuário</h3>' +
+    '<p class="subtle" style="margin-top:-6px">' + (ehGeral
+      ? 'Você tem acesso a todas as unidades: escolha a unidade do novo login.'
+      : 'O login criado aqui é da unidade <strong>' + escapeHtml(S.usuario.UNIDADE) + '</strong>.') + '</p></div>');
+  app.appendChild(cardNovo);
 
-  const novoNome = textField(cardResp, { label: 'Nome do responsável', placeholder: 'Ex: João da Silva' });
-  const btnAdd = el('<button class="btn btn--primary btn--sm" style="align-self:flex-start">＋ Cadastrar responsável</button>');
-  cardResp.appendChild(btnAdd);
-  const listaResp = el('<div class="stack" style="gap:8px"><p class="subtle">Carregando…</p></div>');
-  cardResp.appendChild(listaResp);
+  const nome = textField(cardNovo, { label: 'Nome completo', required: true, placeholder: 'Ex: João da Silva' });
+  const login = textField(cardNovo, { label: 'Usuário (login)', required: true, placeholder: 'Ex: joao.silva',
+    hint: 'Sem espaços. É o que aparece na tela de entrada.' });
+  nome.input.addEventListener('input', function () {
+    if (login.input.dataset.mexido) return;
+    const partes = nome.getValue().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z ]/g, '').split(' ').filter(Boolean);
+    login.setValue(partes.length > 1 ? partes[0] + '.' + partes[partes.length - 1] : (partes[0] || ''));
+  });
+  login.input.addEventListener('input', function () {
+    login.input.dataset.mexido = '1';
+    const limpo = login.input.value.toLowerCase().replace(/\s+/g, '.');
+    if (limpo !== login.input.value) login.input.value = limpo;
+  });
+  const tipo = selectField(cardNovo, { label: 'Perfil', required: true, semVazio: true, value: 'OPERADOR', options: [
+    { value: 'OPERADOR', label: 'Operador — faz checklist e abre manutenção (entra sem senha)' },
+    { value: 'ADMIN', label: 'Administrador — acesso completo da unidade (entra com senha)' }
+  ] });
+  const senha = textField(cardNovo, { label: 'Senha do administrador', required: true, type: 'password', placeholder: 'Mínimo 4 caracteres' });
+  const atualizarSenha = function () { senha.node.hidden = tipo.getValue() !== 'ADMIN'; };
+  tipo.select.addEventListener('change', atualizarSenha); atualizarSenha();
 
-  btnAdd.onclick = async function () {
-    if (!novoNome.getValue()) { toast('Informe o nome do responsável', true); return; }
-    btnAdd.disabled = true; btnAdd.textContent = 'Salvando…';
+  let selUnidade = null;
+  if (ehGeral) {
+    const unidades = await api('getUnidades', {}).catch(function () { return []; });
+    selUnidade = selectField(cardNovo, { label: 'Unidade', required: true, semVazio: true, value: S.unidade.UNIDADE,
+      options: unidades.map(function (u) { return { value: u.UNIDADE, label: u.UNIDADE }; })
+        .concat([{ value: 'TODAS', label: 'TODAS (gerente/coordenador)' }]) });
+  }
+  let selSetor = null;
+  if (!S.usuario.SETOR) {
+    selSetor = selectField(cardNovo, { label: 'Setor', required: true, semVazio: true, value: S.setor || 'TODOS', options: [
+      { value: 'OPERACAO', label: 'Operação' }, { value: 'FABRICA', label: 'Fábrica' }, { value: 'TODOS', label: 'Fábrica e Operação' }
+    ] });
+  } else {
+    cardNovo.appendChild(el('<p class="subtle">Setor: <strong>' + escapeHtml(setorLabel(S.usuario.SETOR)) + '</strong> (o mesmo do seu login)</p>'));
+  }
+
+  const btnCriar = el('<button class="btn btn--primary btn--block">＋ Criar usuário</button>');
+  cardNovo.appendChild(btnCriar);
+  btnCriar.onclick = async function () {
+    if (!nome.getValue()) { toast('Informe o nome', true); nome.input.focus(); return; }
+    if (!login.getValue()) { toast('Informe o usuário (login)', true); login.input.focus(); return; }
+    if (tipo.getValue() === 'ADMIN' && senha.getValue().length < 4) { toast('A senha precisa ter pelo menos 4 caracteres', true); senha.input.focus(); return; }
+    btnCriar.disabled = true; btnCriar.textContent = 'Criando…';
     try {
-      await api('createResponsavel', {
+      await api('createUsuario', {
         unidade: S.unidade.UNIDADE,
-        nome: novoNome.getValue(),
-        idUsuario: S.usuario.ID_USUARIO
+        unidadeUsuario: selUnidade ? selUnidade.getValue() : S.unidade.UNIDADE,
+        nome: nome.getValue(), usuario: login.getValue(), tipo: tipo.getValue(),
+        senha: tipo.getValue() === 'ADMIN' ? senha.getValue() : undefined,
+        setorUsuario: selSetor ? selSetor.getValue() : S.usuario.SETOR
       });
-      toast('Responsável cadastrado!', false, true);
-      novoNome.setValue('');
-      delete S.cache['resp_' + S.unidade.UNIDADE];
-      carregarLista();
+      toast('Usuário ' + login.getValue() + ' criado!', false, true);
+      nome.setValue(''); login.setValue(''); senha.setValue(''); delete login.input.dataset.mexido;
+      carregar();
     } catch (e) { /* toast já mostrado */ }
-    btnAdd.disabled = false; btnAdd.textContent = '＋ Cadastrar responsável';
+    btnCriar.disabled = false; btnCriar.textContent = '＋ Criar usuário';
   };
 
-  async function carregarLista() {
-    listaResp.innerHTML = '<p class="subtle">Carregando…</p>';
-    delete S.cache['resp_' + S.unidade.UNIDADE];
-    const lista = await carregarResponsaveis();
-    listaResp.innerHTML = '';
-    if (!lista.length) { listaResp.appendChild(el('<p class="subtle">Nenhum responsável cadastrado ainda.</p>')); return; }
-    lista.forEach(function (r) {
+  // ---- Lista ----
+  const cardLista = el('<div class="card stack"><h3 class="title-lg">Usuários ativos · ' + escapeHtml(S.unidade.UNIDADE) + '</h3></div>');
+  app.appendChild(cardLista);
+  const lista = el('<div class="stack" style="gap:8px"></div>');
+  cardLista.appendChild(lista);
+
+  async function carregar() {
+    lista.innerHTML = '<p class="subtle">Carregando…</p>';
+    let usuarios;
+    try { usuarios = await api('getUsuariosGestao', { unidade: S.unidade.UNIDADE }); }
+    catch (e) { lista.innerHTML = '<p class="subtle">Não foi possível carregar os usuários.</p>'; return; }
+    lista.innerHTML = '';
+    if (!usuarios.length) { lista.appendChild(el('<p class="subtle">Nenhum usuário ativo nesta unidade.</p>')); return; }
+    usuarios.forEach(function (u) {
+      const box = el('<div class="stack" style="gap:6px"></div>');
       const item = el(
         '<div class="list-item" style="cursor:default">' +
-          '<span><span class="list-item__title">' + escapeHtml(r.NOME) + '</span>' +
-          '<div class="list-item__sub mono">' + escapeHtml(r.ID_RESPONSAVEL) + '</div></span>' +
-        '</div>'
-      );
-      const btnRm = el('<button class="btn btn--danger btn--sm">Remover</button>');
-      btnRm.onclick = async function () {
-        if (!window.confirm('Remover "' + r.NOME + '" da lista de responsáveis?')) return;
-        btnRm.disabled = true; btnRm.textContent = 'Removendo…';
-        try {
-          await api('deleteResponsavel', { idResponsavel: r.ID_RESPONSAVEL, idUsuario: S.usuario.ID_USUARIO });
-          toast('Responsável removido.', false, true);
-          carregarLista();
-        } catch (e) { btnRm.disabled = false; btnRm.textContent = 'Remover'; }
-      };
-      item.appendChild(btnRm);
-      listaResp.appendChild(item);
+          '<span><span class="list-item__title">' + escapeHtml(u.NOME) + (u.EU ? ' <span class="subtle">(você)</span>' : '') + '</span>' +
+          '<div class="list-item__sub">' + escapeHtml(u.USUARIO || '') + ' · ' + escapeHtml(u.UNIDADE) + ' · ' +
+            (u.SETOR ? escapeHtml(setorLabel(u.SETOR)) : 'Fábrica e Operação') + '</div></span>' +
+          '<span class="tag ' + (u.TIPO === 'ADMIN' ? 'tag--info' : 'tag--na') + '">' + (u.TIPO === 'ADMIN' ? 'Administrador' : 'Operador') + '</span>' +
+        '</div>');
+      box.appendChild(item);
+      const acoes = el('<div class="row" style="gap:8px;flex-wrap:wrap"></div>');
+      if (u.TIPO === 'ADMIN' && (u.EU || u.PODE_GERIR)) {
+        const btnSenha = el('<button class="btn btn--outline btn--sm">🔑 Trocar senha</button>');
+        btnSenha.onclick = async function () {
+          const nova = window.prompt('Nova senha para ' + u.NOME + ' (mínimo 4 caracteres):');
+          if (nova === null) return;
+          if (String(nova).trim().length < 4) { toast('A senha precisa ter pelo menos 4 caracteres', true); return; }
+          btnSenha.disabled = true;
+          try {
+            await api('updateSenhaUsuario', { unidade: S.unidade.UNIDADE, idAlvo: u.ID_USUARIO, senha: String(nova).trim() });
+            toast('Senha de ' + u.NOME + ' alterada.' + (u.EU ? ' Entre de novo com a nova senha.' : ''), false, true);
+            if (u.EU) setTimeout(function () { location.reload(); }, 1500);
+          } catch (e) { /* toast já mostrado */ }
+          btnSenha.disabled = false;
+        };
+        acoes.appendChild(btnSenha);
+      }
+      if (u.PODE_GERIR) {
+        const btnRm = el('<button class="btn btn--danger btn--sm">Remover acesso</button>');
+        btnRm.onclick = async function () {
+          if (!window.confirm('Remover o acesso de "' + u.NOME + '"? Ele deixa de entrar no app na hora. O histórico dele continua.')) return;
+          btnRm.disabled = true; btnRm.textContent = 'Removendo…';
+          try {
+            await api('deleteUsuario', { unidade: S.unidade.UNIDADE, idAlvo: u.ID_USUARIO });
+            toast(u.NOME + ' removido.', false, true);
+            carregar();
+          } catch (e) { btnRm.disabled = false; btnRm.textContent = 'Remover acesso'; }
+        };
+        acoes.appendChild(btnRm);
+      }
+      if (acoes.childElementCount) box.appendChild(acoes);
+      lista.appendChild(box);
     });
   }
-  carregarLista();
-
-  // ---- Usuários (somente leitura) ----
-  const cardUsers = el('<div class="card stack"><h3 class="title-lg">Usuários da unidade</h3>' +
-    '<div class="note">Usuários e unidades são cadastrados direto na planilha do Google Sheets, ' +
-    'nas abas <strong>CONFIG_USUARIOS</strong> e <strong>CONFIG_UNIDADES</strong> — é lá que ficam o tipo ' +
-    '(ADMIN/OPERADOR), a senha do admin, o campo ATIVO e o SETOR (FABRICA, OPERACAO ou em branco para os dois). Esta tela só mostra o que está cadastrado.</div>' +
-    '<p class="subtle">Carregando usuários…</p></div>');
-  app.appendChild(cardUsers);
-
-  const usuarios = await api('getUsuarios', { unidade: S.unidade.UNIDADE }).catch(function () { return []; });
-  cardUsers.querySelector('p.subtle').remove();
-  if (!usuarios.length) {
-    cardUsers.appendChild(el('<p class="subtle">Nenhum usuário ativo nesta unidade.</p>'));
-  } else {
-    usuarios.forEach(function (u) {
-      cardUsers.appendChild(el(
-        '<div class="list-item" style="cursor:default">' +
-          '<span><span class="list-item__title">' + escapeHtml(u.NOME) + '</span>' +
-          '<div class="list-item__sub">' + escapeHtml(u.USUARIO || '') + ' · ' + escapeHtml(u.UNIDADE) + ' · ' + (u.SETOR ? escapeHtml(setorLabel(u.SETOR)) : 'Fábrica e Operação') + '</div></span>' +
-          '<span class="tag ' + (u.TIPO === 'ADMIN' ? 'tag--info' : 'tag--na') + '">' + escapeHtml(u.TIPO) + '</span>' +
-        '</div>'
-      ));
-    });
-  }
-
-  // ---- Unidades (somente leitura) ----
-  const cardUnidades = el('<div class="card stack"><h3 class="title-lg">Unidades</h3>' +
-    '<p class="subtle">Carregando unidades…</p></div>');
-  app.appendChild(cardUnidades);
-  const unidades = await api('getUnidades', {}).catch(function () { return []; });
-  cardUnidades.querySelector('p.subtle').remove();
-  unidades.forEach(function (u) {
-    cardUnidades.appendChild(el(
-      '<div class="list-item" style="cursor:default">' +
-        '<span class="list-item__title">' + escapeHtml(u.UNIDADE) + '</span>' +
-        (u.UNIDADE === S.unidade.UNIDADE ? '<span class="tag tag--ok">Atual</span>' : '<span class="subtle mono">' + escapeHtml(u.ID_UNIDADE) + '</span>') +
-      '</div>'
-    ));
-  });
+  carregar();
 
   app.appendChild(el('<p class="subtle" style="text-align:center;padding:10px 0">Central de Frota · ICC Brazil</p>'));
 }
