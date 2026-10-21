@@ -1646,6 +1646,18 @@ function temValorCampo(v) { return v !== undefined && v !== null && String(v).tr
 // O checklist é aberto no início do turno e fechado no fim, com o horímetro
 // final. O Painel mostra, para quem está logado, os checklists dele que
 // ainda não foram fechados (últimos 7 dias). O cartão só aparece se houver.
+// [21/10] Um turno não passa de 12h: horímetro final que dá mais que isso
+// é digitação errada — bloqueia (o servidor confere de novo).
+const MAX_HORAS_TURNO = 12;
+function horasTurnoExcedidas(inicial, final) {
+  if (!temValorCampo(inicial)) return false;
+  const h = Number(final) - Number(inicial);
+  if (isNaN(h) || h <= MAX_HORAS_TURNO) return false;
+  toast('Esse horímetro dá ' + String(Math.round(h * 10) / 10).replace('.', ',') + 'h rodadas (inicial ' + inicial +
+    '). O máximo num turno é ' + MAX_HORAS_TURNO + 'h — confira o valor no painel da máquina.', true);
+  return true;
+}
+
 async function montarChecklistsEmAberto(card) {
   const geracao = GERACAO_TELA;
   const lista = await api('getChecklists', {
@@ -1677,6 +1689,7 @@ async function montarChecklistsEmAberto(card) {
       if (temValorCampo(c.HORIMETRO_INICIAL) && Number(campo.getValue()) < Number(c.HORIMETRO_INICIAL)) {
         toast('O horímetro final não pode ser menor que o inicial (' + c.HORIMETRO_INICIAL + ')', true); return;
       }
+      if (horasTurnoExcedidas(c.HORIMETRO_INICIAL, campo.getValue())) return;
       btn.disabled = true; btn.textContent = 'Fechando…';
       try {
         const r = await api('closeChecklist', { idChecklist: c.ID_CHECKLIST, horimetroFinal: campo.getValue(), idUsuario: S.usuario.ID_USUARIO });
@@ -1735,6 +1748,7 @@ function montarPendenciasFechamento(body, d) {
         if (temValorCampo(p.HORIMETRO_INICIAL) && Number(campo.getValue()) < Number(p.HORIMETRO_INICIAL)) {
           toast('O horímetro final não pode ser menor que o inicial (' + p.HORIMETRO_INICIAL + ')', true); return;
         }
+        if (horasTurnoExcedidas(p.HORIMETRO_INICIAL, campo.getValue())) return;
         btn.disabled = true; btn.textContent = 'Fechando…';
         try {
           await api('closeChecklist', { idChecklist: p.ID_CHECKLIST, horimetroFinal: campo.getValue(), idUsuario: S.usuario.ID_USUARIO });
@@ -1778,17 +1792,25 @@ async function renderHorasRodadas() {
           '<option value="todos">Todo o período</option>' +
           '<option value="custom">Período personalizado</option>' +
         '</select>' +
+        '<select data-role="grupo"><option value="">Empilhadeiras e lavadoras</option>' +
+          '<option value="EMPILHADEIRA">Só empilhadeiras</option><option value="LAVADORA">Só lavadoras</option>' +
+          '<option value="OUTROS">Outros equipamentos</option></select>' +
         '<select data-role="equip"><option value="">Todas as máquinas</option></select>' +
       '</div>' +
       '<div class="filters" data-role="custom" hidden>' +
         '<input type="date" data-role="ini"><input type="date" data-role="fim">' +
         '<button class="btn btn--outline btn--sm" data-role="aplicar">Aplicar</button>' +
       '</div>' +
+      '<div class="row" style="gap:8px;flex-wrap:wrap">' +
+        '<button class="btn btn--outline btn--sm" data-role="pdf">📄 Baixar PDF</button>' +
+        '<button class="btn btn--outline btn--sm" data-role="email">✉️ Enviar PDF por e-mail</button>' +
+      '</div>' +
     '</div>'
   );
   app.appendChild(topo);
   const selPeriodo = topo.querySelector('[data-role="periodo"]');
   const selEquip = topo.querySelector('[data-role="equip"]');
+  const selGrupo = topo.querySelector('[data-role="grupo"]');
   const custom = topo.querySelector('[data-role="custom"]');
   const ini = topo.querySelector('[data-role="ini"]'), fim = topo.querySelector('[data-role="fim"]');
   selPeriodo.value = 'semana';
@@ -1796,12 +1818,43 @@ async function renderHorasRodadas() {
   const body = el('<div class="stack" style="margin-top:12px"><p class="subtle">Carregando…</p></div>');
   app.appendChild(body);
 
-  (await carregarEquipamentos(true)).forEach(function (e) {
-    selEquip.appendChild(el('<option value="' + escapeHtml(e.ID_EQUIPAMENTO) + '">' + escapeHtml(e.NOME) + '</option>'));
-  });
+  const equips = await carregarEquipamentos(true);
+  const grupoPorEquip = {};
+  equips.forEach(function (e) { grupoPorEquip[String(e.ID_EQUIPAMENTO)] = grupoDoTipo(e.TIPO); });
+  const preencherEquips = function () {
+    selEquip.innerHTML = '<option value="">Todas as máquinas</option>';
+    equips.filter(function (e) { return !selGrupo.value || grupoPorEquip[String(e.ID_EQUIPAMENTO)] === selGrupo.value; })
+      .forEach(function (e) { selEquip.appendChild(el('<option value="' + escapeHtml(e.ID_EQUIPAMENTO) + '">' + escapeHtml(e.NOME) + '</option>')); });
+  };
+  preencherEquips();
 
   selPeriodo.onchange = function () { custom.hidden = selPeriodo.value !== 'custom'; if (selPeriodo.value !== 'custom') load(); };
   selEquip.onchange = load;
+  selGrupo.onchange = function () { preencherEquips(); load(); };
+  const filtroAtual = function () {
+    const p = selPeriodo.value;
+    return p === 'hoje' ? { periodo: 'custom', dataInicio: hojeIso(), dataFim: hojeIso() }
+      : p === 'custom' ? { periodo: 'custom', dataInicio: ini.value || undefined, dataFim: fim.value || undefined }
+      : { periodo: p };
+  };
+  const pdf = async function (btn, enviar) {
+    const rotulo = btn.textContent;
+    btn.disabled = true; btn.textContent = enviar ? 'Enviando…' : 'Gerando PDF…';
+    try {
+      const res = await api('gerarHorasRodadasPDF', Object.assign({
+        unidade: S.unidade.UNIDADE, idEquipamento: selEquip.value || undefined,
+        geradoPor: S.usuario.NOME, enviarEmail: enviar || undefined
+      }, filtroAtual()));
+      if (enviar) toast('PDF enviado para ' + (res.enviadoPara || []).length + ' e-mail(s) da unidade.', false, true);
+      else { downloadBase64File(res.filename, res.base64, 'application/pdf'); toast('PDF baixado.', false, true); }
+    } catch (e) { /* toast já mostrado */ }
+    btn.disabled = false; btn.textContent = rotulo;
+  };
+  topo.querySelector('[data-role="pdf"]').onclick = function () { pdf(this, false); };
+  topo.querySelector('[data-role="email"]').onclick = function () {
+    if (!window.confirm('Enviar o PDF de horas rodadas para a lista de e-mails da unidade?')) return;
+    pdf(this, true);
+  };
   topo.querySelector('[data-role="aplicar"]').onclick = function () {
     if (!ini.value && !fim.value) { toast('Escolha ao menos uma data', true); return; }
     load();
@@ -1809,21 +1862,42 @@ async function renderHorasRodadas() {
 
   async function load() {
     body.innerHTML = '<p class="subtle">Carregando…</p>';
-    const p = selPeriodo.value;
-    const filtro = p === 'hoje' ? { periodo: 'custom', dataInicio: hojeIso(), dataFim: hojeIso() }
-      : p === 'custom' ? { periodo: 'custom', dataInicio: ini.value || undefined, dataFim: fim.value || undefined }
-      : { periodo: p };
     const lista = await api('getChecklists', Object.assign({
       unidade: S.unidade.UNIDADE, idEquipamento: selEquip.value || undefined
-    }, filtro)).catch(function () { return null; });
+    }, filtroAtual())).catch(function () { return null; });
     body.innerHTML = '';
     if (lista === null) { body.appendChild(el(blocoFalhaCarregar())); return; }
-    montarHorasRodadas(body, lista);
+    const doGrupo = lista.filter(function (c) { return !selGrupo.value || (grupoPorEquip[String(c.ID_EQUIPAMENTO)] || 'OUTROS') === selGrupo.value; });
+    if (selGrupo.value) { montarHorasRodadas(body, doGrupo); return; }
+    // Sem filtro de tipo: um bloco para cada tipo, um embaixo do outro.
+    let algum = false;
+    GRUPOS_HORAS.forEach(function (g) {
+      const doTipo = lista.filter(function (c) { return (grupoPorEquip[String(c.ID_EQUIPAMENTO)] || 'OUTROS') === g.id; });
+      if (!doTipo.length) return;
+      algum = true;
+      body.appendChild(el('<h3 class="title-lg" style="margin-top:10px">' + g.ic + ' ' + g.rotulo + '</h3>'));
+      const sec = el('<div class="stack"></div>');
+      body.appendChild(sec);
+      montarHorasRodadas(sec, doTipo, g.id);
+    });
+    if (!algum) montarHorasRodadas(body, []);
   }
   load();
 }
 
-function montarHorasRodadas(body, checklists) {
+const GRUPOS_HORAS = [
+  { id: 'EMPILHADEIRA', rotulo: 'Empilhadeiras', ic: '🚜' },
+  { id: 'LAVADORA', rotulo: 'Lavadoras', ic: '🧽' },
+  { id: 'OUTROS', rotulo: 'Outros equipamentos', ic: '🔧' }
+];
+function grupoDoTipo(tipo) {
+  const t = String(tipo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (t.indexOf('empilhadeira') > -1) return 'EMPILHADEIRA';
+  if (t.indexOf('lavadora') > -1) return 'LAVADORA';
+  return 'OUTROS';
+}
+
+function montarHorasRodadas(body, checklists, grupoId) {
   const hh = function (v) { return String(Math.round(v * 10) / 10).replace('.', ',') + 'h'; };
   const turnos = [];      // checklists fechados com os dois horímetros
   let emAberto = 0, semHorimetro = 0, invalidos = 0;
@@ -1894,7 +1968,7 @@ function montarHorasRodadas(body, checklists) {
   body.appendChild(cardTab);
   const linhas = turnos.slice().sort(function (a, b) { return a.chaveDia < b.chaveDia ? 1 : a.chaveDia > b.chaveDia ? -1 : String(a.NOME_EQUIPAMENTO).localeCompare(String(b.NOME_EQUIPAMENTO)); });
   const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
-  btnCsv.onclick = function () { downloadCSV(nomeArquivo('horas_rodadas', 'csv'), COLUNAS_HORAS_RODADAS, linhas); };
+  btnCsv.onclick = function () { downloadCSV(nomeArquivo('horas_rodadas' + (grupoId ? '_' + grupoId.toLowerCase() : ''), 'csv'), COLUNAS_HORAS_RODADAS, linhas); };
   cardTab.appendChild(btnCsv);
   const scroll = el('<div class="table-scroll"></div>');
   scroll.appendChild(tabelaHtml(COLUNAS_HORAS_RODADAS, linhas.slice(0, 60)));
@@ -5078,9 +5152,20 @@ async function renderRelatorioGas() {
       dataInicio: p.dataInicio,
       dataFim: p.dataFim
     }).catch(function () { return null; });
+    if (!r) { body.innerHTML = ''; return; }
+    // [21/10] Período anterior, do mesmo tamanho, para comparar.
+    let anterior = null;
+    const ini = r.periodo && r.periodo.inicio ? new Date(r.periodo.inicio) : null;
+    const fim = r.periodo && r.periodo.fim ? new Date(r.periodo.fim) : null;
+    if (ini && fim && !isNaN(ini) && !isNaN(fim)) {
+      const iso = function (d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+      const dur = fim.getTime() - ini.getTime();
+      const fimAnt = new Date(ini.getTime() - 86400000), iniAnt = new Date(ini.getTime() - dur - 86400000);
+      anterior = await api('getRelatorioGas', { unidade: S.unidade.UNIDADE, periodo: 'custom', dataInicio: iso(iniAnt), dataFim: iso(fimAnt) })
+        .catch(function () { return null; });
+    }
     body.innerHTML = '';
-    if (!r) return;
-    montarRelatorioGas(body, r, load);
+    montarRelatorioGas(body, r, load, anterior);
     montarCarregamentos(body, p, load);
   }
   load();
@@ -5142,7 +5227,7 @@ const COLUNAS_CARREGAMENTO = [
   ['DATA_HORA', 'Data/hora', function (v) { return fmtDataHora(v); }]
 ];
 
-function montarRelatorioGas(body, r, recarregar) {
+function montarRelatorioGas(body, r, recarregar, anterior) {
   const ind = r.indicadores;
 
   body.appendChild(el(
@@ -5159,7 +5244,7 @@ function montarRelatorioGas(body, r, recarregar) {
     '</div>'
   ));
 
-  body.appendChild(el(
+  if (!ehAdmin()) body.appendChild(el(
     '<div class="kpi-grid">' +
       kpi(ind.totalTrocas, 'Trocas no período') +
       kpi(fmtMoeda(ind.custoTotal), 'Custo total', 'kpi--accent') +
@@ -5168,61 +5253,7 @@ function montarRelatorioGas(body, r, recarregar) {
     '</div>'
   ));
 
-  // ---- Custo por fornecedor ----
-  const entradasFornecedor = Object.entries(r.custoPorFornecedor || {}).sort(function (a, b) { return b[1] - a[1]; });
-  const cardForn = el('<div class="card stack"><h3 class="title-lg">⛽ Custo por fornecedor</h3>' +
-    '<p class="subtle" style="margin-top:-6px">Total gasto e número de trocas no período</p></div>');
-  body.appendChild(cardForn);
-  if (!entradasFornecedor.length) {
-    cardForn.appendChild(el('<p class="subtle">Nenhuma troca de gás no período.</p>'));
-  } else {
-    const max = entradasFornecedor[0][1] || 1;
-    entradasFornecedor.forEach(function (e) {
-      const qtd = (r.trocasPorFornecedor || {})[e[0]] || 0;
-      cardForn.appendChild(el(
-        '<div class="bar-row"><span class="label">' + escapeHtml(e[0]) + '</span>' +
-        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, (e[1] / max) * 100) + '%"></div></div>' +
-        '<span class="bar-val">' + escapeHtml(fmtMoeda(e[1])) + ' · ' + qtd + 'x</span></div>'
-      ));
-    });
-  }
-
-  // ---- Rankings por frota ----
-  function cardRanking(titulo, subtitulo, icone, lista, montarLinha) {
-    const card = el('<div class="card stack"><h3 class="title-lg">' + icone + ' ' + escapeHtml(titulo) + '</h3>' +
-      '<p class="subtle" style="margin-top:-6px">' + escapeHtml(subtitulo) + '</p></div>');
-    body.appendChild(card);
-    if (!lista.length) {
-      card.appendChild(el('<p class="subtle">Sem dados suficientes no período.</p>'));
-      return;
-    }
-    lista.forEach(function (item, i) {
-      card.appendChild(el(
-        '<div class="rank-row">' +
-          '<span class="rank-pos">' + (i + 1) + '</span>' +
-          '<span class="rank-info"><span class="n">' + escapeHtml(item.nomeEquipamento) + '</span>' +
-          '<div class="subtle" style="font-size:12px">' + montarLinha(item) + '</div></span>' +
-          '<span class="rank-time">' + escapeHtml(item.__valorExibido) + '</span>' +
-        '</div>'
-      ));
-    });
-  }
-
-  cardRanking('Maior custo por frota', 'Total gasto com gás no período', '💰',
-    (r.rankingCustoPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: fmtMoeda(i.custo) }); }),
-    function (item) { return item.quantidade + ' troca(s)'; });
-
-  cardRanking('Mais horas de uso por frota', 'Horas acumuladas entre trocas no período', '⏱️',
-    (r.rankingHorasPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: i.horasTotal + 'h' }); }),
-    function (item) { return item.quantidade + ' troca(s)'; });
-
-  cardRanking('Maior custo por hora', 'Frotas com o gás mais caro em relação ao uso', '📈',
-    (r.rankingCustoPorHoraPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: fmtMoeda(i.custoPorHora) + '/h' }); }),
-    function () { return 'Custo ÷ horas de uso'; });
-
-  cardRanking('Maior intervalo médio entre trocas', 'Frotas que mais seguram o gás', '🕐',
-    (r.rankingIntervaloMedioPorFrota || []).map(function (i) { return Object.assign({}, i, { __valorExibido: i.horasMedia + 'h' }); }),
-    function (item) { return item.quantidade + ' troca(s)'; });
+  if (ehAdmin()) montarAnaliseGas(body, r, anterior);
 
   // A tabela "Trocas do período" saiu desta tela (o CSV continua
   // disponível no botão abaixo). Fica só a exclusão de troca lançada por
@@ -5264,6 +5295,227 @@ function montarRelatorioGas(body, r, recarregar) {
       };
       cardDados.appendChild(boxExcluir);
     }
+  }
+}
+
+// [21/10] Visão analítica do gás (Admin): comparação com o período
+// anterior, tendência, preço por fornecedor, eficiência por máquina,
+// trocas fora do padrão, dia da semana e qualidade dos dados. Tudo
+// calculado a partir das trocas do período que o servidor já devolve.
+function montarAnaliseGas(body, r, anterior) {
+  const trocas = (r.trocas || []).slice();
+  const num = function (v) { return temValorCampo(v) && !isNaN(Number(v)) ? Number(v) : null; };
+  const dec = function (v, c) { return (Math.round(v * Math.pow(10, c)) / Math.pow(10, c)).toFixed(c).replace('.', ','); };
+  const hTxt = function (v) { return v === null || v === undefined ? '—' : dec(v, 1) + 'h'; };
+  const pct = function (v) { return dec(v * 100, 0) + '%'; };
+  const resumo = function (lista) {
+    const o = { n: lista.length, custo: 0, kg: 0, custoComKg: 0, horas: 0, custoComHoras: 0, nHoras: 0, nKg: 0 };
+    lista.forEach(function (t) {
+      const c = num(t.CUSTO) || 0, kg = num(t.QUANTIDADE_KG), h = num(t.HORAS_OPERACAO);
+      o.custo += c;
+      if (kg !== null && kg > 0) { o.kg += kg; o.custoComKg += c; o.nKg++; }
+      if (h !== null && h > 0) { o.horas += h; o.custoComHoras += c; o.nHoras++; }
+    });
+    o.rkg = o.kg ? o.custoComKg / o.kg : null;
+    o.rh = o.horas ? o.custoComHoras / o.horas : null;
+    o.hTroca = o.nHoras ? o.horas / o.nHoras : null;
+    o.rTroca = o.n ? o.custo / o.n : null;
+    return o;
+  };
+  const A = resumo(trocas);
+  const P = anterior ? resumo(anterior.trocas || []) : null;
+
+  // ---- KPIs com variação ----
+  const kpiVar = function (valorTxt, label, atual, ant, menorMelhor) {
+    let sub = '';
+    if (P && ant !== null && ant !== undefined && ant !== 0 && atual !== null && atual !== undefined) {
+      const v = (atual - ant) / Math.abs(ant);
+      const bom = menorMelhor ? v <= 0 : v >= 0;
+      sub = '<span style="font-size:11.5px;font-weight:700;color:' + (Math.abs(v) < 0.005 ? 'var(--ink-soft)' : bom ? 'var(--st-uso)' : 'var(--st-risco)') + '">' +
+        (v > 0 ? '▲ ' : v < 0 ? '▼ ' : '') + dec(Math.abs(v) * 100, 0) + '% vs anterior</span>';
+    } else if (P) sub = '<span class="subtle" style="font-size:11.5px">sem base anterior</span>';
+    return '<div class="kpi"><span class="badge-count">' + escapeHtml(valorTxt) + '</span>' +
+      '<span class="subtle">' + escapeHtml(label) + '</span>' + sub + '</div>';
+  };
+  body.appendChild(el('<div class="kpi-grid">' +
+    kpiVar(String(A.n), 'Trocas', A.n, P && P.n, true) +
+    kpiVar(fmtMoeda(A.custo), 'Custo total', A.custo, P && P.custo, true) +
+    kpiVar(A.kg ? dec(A.kg, 1) + ' kg' : '—', 'Gás consumido', A.kg || null, P && (P.kg || null), true) +
+    kpiVar(A.rh !== null ? fmtMoeda(A.rh) + '/h' : '—', 'Custo por hora de uso', A.rh, P && P.rh, true) +
+    '</div>'));
+  body.appendChild(el('<div class="kpi-grid">' +
+    kpiVar(A.hTroca !== null ? hTxt(A.hTroca) : '—', 'Horas por troca (média)', A.hTroca, P && P.hTroca, false) +
+    kpiVar(A.rkg !== null ? fmtMoeda(A.rkg) + '/kg' : '—', 'Preço médio do kg', A.rkg, P && P.rkg, true) +
+    kpiVar(A.rTroca !== null ? fmtMoeda(A.rTroca) : '—', 'Custo médio por troca', A.rTroca, P && P.rTroca, true) +
+    kpiVar(String(Object.keys(trocas.reduce(function (o, t) { o[t.ID_EQUIPAMENTO] = 1; return o; }, {})).length), 'Máquinas que trocaram', null, null) +
+    '</div>'));
+  if (P) body.appendChild(el('<p class="subtle" style="margin-top:-4px">Comparação com ' + escapeHtml(anterior.periodo.label) +
+    ' (' + P.n + ' troca(s), ' + escapeHtml(fmtMoeda(P.custo)) + '). Verde = melhorou, vermelho = piorou.</p>'));
+
+  if (!trocas.length) {
+    body.appendChild(el('<div class="card"><p class="subtle">Nenhuma troca de gás no período.</p></div>'));
+    return;
+  }
+
+  // ---- Tendência (semana ou mês) ----
+  const datas = trocas.map(function (t) { return new Date(t.DATA_HORA); }).filter(function (d) { return !isNaN(d); });
+  const span = datas.length ? (Math.max.apply(null, datas) - Math.min.apply(null, datas)) / 86400000 : 0;
+  const porMes = span > 62;
+  const chaveTempo = function (d) {
+    if (porMes) return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    const seg = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+    return seg.getFullYear() + '-' + String(seg.getMonth() + 1).padStart(2, '0') + '-' + String(seg.getDate()).padStart(2, '0');
+  };
+  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const rotTempo = function (k) { const p = k.split('-'); return porMes ? MESES[Number(p[1]) - 1] + '/' + p[0].slice(2) : p[2] + '/' + p[1]; };
+  const buckets = {};
+  trocas.forEach(function (t) {
+    const d = new Date(t.DATA_HORA); if (isNaN(d)) return;
+    const k = chaveTempo(d);
+    const b = buckets[k] || (buckets[k] = { custo: 0, n: 0 });
+    b.custo += num(t.CUSTO) || 0; b.n++;
+  });
+  const chaves = Object.keys(buckets).sort();
+  const cardTend = el('<div class="card stack"><h3 class="title-lg">📈 Tendência do gasto</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Custo por ' + (porMes ? 'mês' : 'semana (começando na segunda)') + ' · número de trocas em cima de cada coluna</p></div>');
+  const maxC = Math.max.apply(null, chaves.map(function (k) { return buckets[k].custo; }).concat([1]));
+  const W = Math.max(320, chaves.length * 46), H = 170, base = 140, larg = Math.min(30, (W - 20) / chaves.length - 10);
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="min-width:' + Math.min(W, 640) + 'px;display:block" role="img" aria-label="Custo de gás por período">' +
+    '<line x1="0" y1="' + base + '" x2="' + W + '" y2="' + base + '" stroke="var(--line)"/>';
+  chaves.forEach(function (k, i) {
+    const b = buckets[k], h = Math.max(2, (b.custo / maxC) * (base - 28));
+    const x = 10 + i * ((W - 20) / chaves.length) + (((W - 20) / chaves.length) - larg) / 2;
+    svg += '<rect x="' + x + '" y="' + (base - h) + '" width="' + larg + '" height="' + h + '" rx="3" fill="var(--accent)"><title>' +
+      escapeHtml(rotTempo(k) + ': ' + fmtMoeda(b.custo) + ' em ' + b.n + ' troca(s)') + '</title></rect>' +
+      '<text x="' + (x + larg / 2) + '" y="' + (base - h - 5) + '" text-anchor="middle" font-size="10.5" fill="currentColor">' + b.n + 'x</text>' +
+      '<text x="' + (x + larg / 2) + '" y="' + (base + 15) + '" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">' + escapeHtml(rotTempo(k)) + '</text>';
+  });
+  svg += '</svg>';
+  const svgWrap = el('<div style="overflow-x:auto"></div>'); svgWrap.innerHTML = svg;
+  cardTend.appendChild(svgWrap);
+  if (chaves.length >= 2) {
+    const ult = buckets[chaves[chaves.length - 1]].custo, penult = buckets[chaves[chaves.length - 2]].custo;
+    if (penult > 0) cardTend.appendChild(el('<p class="subtle">' + (porMes ? 'Último mês' : 'Última semana') + ': ' + fmtMoeda(ult) +
+      ' (' + (ult >= penult ? '▲ ' : '▼ ') + dec(Math.abs(ult - penult) / penult * 100, 0) + '% sobre ' + (porMes ? 'o mês' : 'a semana') + ' anterior).</p>'));
+  }
+  body.appendChild(cardTend);
+
+  // ---- Fornecedores: preço e participação ----
+  const forn = {};
+  trocas.forEach(function (t) {
+    const f = String(t.FORNECEDOR || '').trim() || '(sem fornecedor)';
+    (forn[f] || (forn[f] = [])).push(t);
+  });
+  const linhasF = Object.keys(forn).map(function (f) { return Object.assign({ nome: f }, resumo(forn[f])); })
+    .sort(function (a, b) { return b.custo - a.custo; });
+  const comPreco = linhasF.filter(function (f) { return f.rkg !== null; });
+  const maisBarato = comPreco.slice().sort(function (a, b) { return a.rkg - b.rkg; })[0] || null;
+  const economia = maisBarato ? comPreco.reduce(function (t, f) { return t + f.kg * (f.rkg - maisBarato.rkg); }, 0) : 0;
+  const cardF = el('<div class="card stack"><h3 class="title-lg">🏷️ Fornecedores: preço e participação</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Preço do kg, custo médio por troca e fatia do gasto de cada fornecedor</p></div>');
+  const tabF = '<div class="table-scroll"><table class="report-table"><thead><tr><th>Fornecedor</th><th>Trocas</th><th>Gasto</th><th>% do gasto</th><th>Kg</th><th>R$/kg</th><th>R$/troca</th></tr></thead><tbody>' +
+    linhasF.map(function (f) {
+      const barato = maisBarato && f.nome === maisBarato.nome && comPreco.length > 1;
+      return '<tr><td>' + escapeHtml(f.nome) + (barato ? ' <span class="tag tag--ok">mais barato</span>' : '') + '</td><td>' + f.n + '</td><td>' + escapeHtml(fmtMoeda(f.custo)) +
+        '</td><td>' + (A.custo ? pct(f.custo / A.custo) : '—') + '</td><td>' + (f.kg ? dec(f.kg, 1) : '—') + '</td><td>' + (f.rkg !== null ? escapeHtml(fmtMoeda(f.rkg)) : '—') +
+        '</td><td>' + escapeHtml(fmtMoeda(f.rTroca)) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  cardF.appendChild(el(tabF));
+  if (economia > 0.5 && comPreco.length > 1) {
+    cardF.appendChild(el('<div class="note">💡 Se todo o gás do período tivesse sido comprado pelo preço de <strong>' + escapeHtml(maisBarato.nome) +
+      '</strong> (' + escapeHtml(fmtMoeda(maisBarato.rkg)) + '/kg), a economia seria de <strong>' + escapeHtml(fmtMoeda(economia)) + '</strong>.</div>'));
+  }
+  body.appendChild(cardF);
+
+  // ---- Eficiência por máquina (tabela que ordena) ----
+  const porMaq = {};
+  trocas.forEach(function (t) { const k = String(t.ID_EQUIPAMENTO); (porMaq[k] || (porMaq[k] = { nome: t.NOME_EQUIPAMENTO, lista: [] })).lista.push(t); });
+  const maqs = Object.keys(porMaq).map(function (k) { return Object.assign({ id: k, nome: porMaq[k].nome, lista: porMaq[k].lista }, resumo(porMaq[k].lista)); });
+  maqs.forEach(function (m) {
+    if (m.rh === null || m.hTroca === null) { m.sit = 'Sem horímetro'; m.sitCls = 'tag--na'; m.sitOrd = 0; return; }
+    const caro = A.rh && m.rh > A.rh * 1.25, cedo = A.hTroca && m.hTroca < A.hTroca * 0.75;
+    m.sit = caro && cedo ? 'Custo/h alto e troca cedo' : caro ? 'Custo/h alto' : cedo ? 'Troca antes da média' : 'Dentro da média';
+    m.sitCls = caro || cedo ? 'tag--nok' : 'tag--ok'; m.sitOrd = caro && cedo ? 3 : caro || cedo ? 2 : 1;
+  });
+  const cardM = el('<div class="card stack"><h3 class="title-lg">🚜 Eficiência por máquina</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Toque no título de uma coluna para ordenar. Referência da frota: ' +
+    hTxt(A.hTroca) + ' por troca e ' + (A.rh !== null ? fmtMoeda(A.rh) + '/h' : '—') + '. Fica em vermelho quem passa de 25% acima do custo/h médio ou troca com 25% menos horas que a média.</p></div>');
+  const colsM = [
+    ['nome', 'Máquina', function (m) { return escapeHtml(m.nome); }],
+    ['n', 'Trocas', function (m) { return m.n; }],
+    ['custo', 'Gasto', function (m) { return escapeHtml(fmtMoeda(m.custo)); }],
+    ['kg', 'Kg', function (m) { return m.kg ? dec(m.kg, 1) : '—'; }],
+    ['horas', 'Horas de uso', function (m) { return m.horas ? hTxt(m.horas) : '—'; }],
+    ['hTroca', 'h/troca', function (m) { return hTxt(m.hTroca); }],
+    ['rh', 'R$/h', function (m) { return m.rh !== null ? escapeHtml(fmtMoeda(m.rh)) : '—'; }],
+    ['sitOrd', 'Situação', function (m) { return '<span class="tag ' + m.sitCls + '">' + escapeHtml(m.sit) + '</span>'; }]
+  ];
+  let ordem = { col: 'custo', desc: true };
+  const tabWrap = el('<div class="table-scroll"></div>');
+  const desenhar = function () {
+    const v = function (m) { const x = m[ordem.col]; return x === null || x === undefined ? -Infinity : x; };
+    const lin = maqs.slice().sort(function (a, b) {
+      if (ordem.col === 'nome') return ordem.desc ? String(b.nome).localeCompare(String(a.nome)) : String(a.nome).localeCompare(String(b.nome));
+      return ordem.desc ? v(b) - v(a) : v(a) - v(b);
+    });
+    tabWrap.innerHTML = '<table class="report-table"><thead><tr>' + colsM.map(function (c) {
+      return '<th data-col="' + c[0] + '" style="cursor:pointer;white-space:nowrap">' + c[1] + (ordem.col === c[0] ? (ordem.desc ? ' ▼' : ' ▲') : '') + '</th>';
+    }).join('') + '</tr></thead><tbody>' + lin.map(function (m) {
+      return '<tr>' + colsM.map(function (c) { return '<td>' + c[2](m) + '</td>'; }).join('') + '</tr>';
+    }).join('') + '</tbody></table>';
+    tabWrap.querySelectorAll('th').forEach(function (th) {
+      th.onclick = function () {
+        const c = th.getAttribute('data-col');
+        ordem = { col: c, desc: ordem.col === c ? !ordem.desc : c !== 'nome' };
+        desenhar();
+      };
+    });
+  };
+  desenhar();
+  cardM.appendChild(tabWrap);
+  body.appendChild(cardM);
+
+  // ---- Trocas fora do padrão ----
+  const fora = [];
+  maqs.forEach(function (m) {
+    const hs = m.lista.map(function (t) { return num(t.HORAS_OPERACAO); }).filter(function (h) { return h !== null && h > 0; }).sort(function (a, b) { return a - b; });
+    const mediana = hs.length >= 3 ? hs[Math.floor(hs.length / 2)] : (A.hTroca || null);
+    m.lista.forEach(function (t) {
+      const h = num(t.HORAS_OPERACAO);
+      if (h !== null && h <= 0) fora.push({ t: t, motivo: 'Horímetro igual ou menor que o da troca anterior — lançamento a conferir' });
+      else if (h !== null && mediana && h < mediana * 0.5) fora.push({ t: t, motivo: 'Durou ' + hTxt(h) + ', menos da metade do normal (' + hTxt(mediana) + ') — possível vazamento ou cilindro incompleto' });
+    });
+  });
+  trocas.forEach(function (t) {
+    const kg = num(t.QUANTIDADE_KG), c = num(t.CUSTO);
+    const f = linhasF.find(function (x) { return x.nome === (String(t.FORNECEDOR || '').trim() || '(sem fornecedor)'); });
+    if (kg && c && f && f.rkg && c / kg > f.rkg * 1.3) fora.push({ t: t, motivo: 'Preço de ' + fmtMoeda(c / kg) + '/kg, 30% acima do normal desse fornecedor (' + fmtMoeda(f.rkg) + '/kg)' });
+  });
+  const cardFora = el('<div class="card stack"' + (fora.length ? ' style="border-left:4px solid var(--st-risco)"' : '') + '><h3 class="title-lg">🚩 Trocas fora do padrão</h3>' +
+    '<p class="subtle" style="margin-top:-6px">Trocas que duraram muito pouco ou saíram caras demais</p></div>');
+  if (!fora.length) cardFora.appendChild(el('<p class="subtle">Nenhuma troca fora do padrão no período. 👍</p>'));
+  fora.sort(function (a, b) { return new Date(b.t.DATA_HORA) - new Date(a.t.DATA_HORA); }).slice(0, 15).forEach(function (x) {
+    cardFora.appendChild(el('<div class="list-item is-alert" style="cursor:default"><span><span class="list-item__title">' + escapeHtml(x.t.NOME_EQUIPAMENTO) +
+      ' · ' + fmtDataHora(x.t.DATA_HORA) + '</span><div class="list-item__sub">' + escapeHtml(x.motivo) + ' · ' + escapeHtml(x.t.FORNECEDOR || '—') +
+      ' · ' + escapeHtml(x.t.RESPONSAVEL || '—') + '</div></span><span class="subtle mono">' + escapeHtml(x.t.ID_TROCA_GAS) + '</span></div>'));
+  });
+  if (fora.length > 15) cardFora.appendChild(el('<p class="subtle">Mostrando 15 de ' + fora.length + '.</p>'));
+  body.appendChild(cardFora);
+
+  // ---- Dia da semana ----
+  const DIAS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const porDia = [0, 0, 0, 0, 0, 0, 0];
+  datas.forEach(function (d) { porDia[d.getDay()]++; });
+  body.appendChild(cardBarras('📅 Trocas por dia da semana', 'Ajuda a planejar o estoque de cilindros',
+    [1, 2, 3, 4, 5, 6, 0].map(function (i) { return { rotulo: DIAS[i], valor: porDia[i], texto: porDia[i] + 'x' }; }),
+    '#3B7DD8', ''));
+
+  // ---- Qualidade dos dados ----
+  const semKg = trocas.length - A.nKg, semH = trocas.length - A.nHoras;
+  if (semKg || semH) {
+    body.appendChild(el('<div class="note warn">Qualidade dos dados: ' +
+      [semKg ? semKg + ' troca(s) sem kg informado (' + pct(semKg / trocas.length) + ') ficam fora do preço por kg' : '',
+       semH ? semH + ' sem horas de uso (' + pct(semH / trocas.length) + ') ficam fora do custo por hora' : ''].filter(Boolean).join(' · ') + '.</div>'));
   }
 }
 
@@ -5375,9 +5627,18 @@ function montarFrotasExecutivo(body, f) {
   body.appendChild(cardBarras('Quantidade de manutenções por frota', 'Chamados abertos no período',
     (f.manutencoesPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.quantidade, texto: x.quantidade + ' · ' + x.tempoTexto }; }),
     'var(--accent)', 'Nenhuma manutenção no período.'));
-  body.appendChild(cardBarras('Horas em operação por frota', 'Horas rodadas pelo horímetro do checklist (final − inicial) no período',
-    (f.operacaoPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
-    'var(--st-uso)', 'Nenhuma troca de gás com horímetro no período.'));
+  // [21/10] Empilhadeiras e lavadoras separadas.
+  if (f.operacaoPorGrupo && f.operacaoPorGrupo.length) {
+    f.operacaoPorGrupo.forEach(function (g) {
+      body.appendChild(cardBarras(g.ic + ' Horas rodadas · ' + g.rotulo, g.totalTexto + ' no período, pelo horímetro do checklist (final − inicial)',
+        g.frotas.map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
+        'var(--st-uso)', 'Nenhum checklist fechado com horímetro no período.'));
+    });
+  } else {
+    body.appendChild(cardBarras('Horas em operação por frota', 'Horas rodadas pelo horímetro do checklist (final − inicial) no período',
+      (f.operacaoPorFrota || []).map(function (x) { return { rotulo: x.frota, valor: x.horas, texto: x.texto }; }),
+      'var(--st-uso)', 'Nenhum checklist fechado com horímetro no período.'));
+  }
   const gas = f.gasPorFrota || [];
   body.appendChild(cardBarras('Trocas de gás por frota', 'Quantidade de trocas no período',
     gas.slice().sort(function (a, b) { return b.trocas - a.trocas; }).map(function (x) { return { rotulo: x.frota, valor: x.trocas, texto: x.trocas + 'x' }; }),
