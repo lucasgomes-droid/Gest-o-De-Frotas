@@ -1651,6 +1651,23 @@ function temValorCampo(v) { return v !== undefined && v !== null && String(v).tr
 // valor parece digitado errado, o aviso fica vermelho e explica o porquê.
 // Devolve uma Promise: true = continuar, false = corrigir.
 const HORAS_TURNO_ALERTA = 12;
+// [22/10] O horímetro é digitado sem vírgula e o ÚLTIMO número é a fração da
+// hora (décimo): 459209 = 45.920,9h. Diferença entre horímetros ÷ 10 = horas.
+// Ex.: 459209 → 459213 = 0,4h · 45995 → 46002 = 0,7h.
+const HORIMETRO_DIVISOR = 10;
+function horasHorimetro(final, inicial) {
+  const d = Number(final) - Number(inicial);
+  return isNaN(d) ? null : Math.round(d / HORIMETRO_DIVISOR * 100) / 100;
+}
+// 459209 → "45.920,9" (como aparece no visor).
+function fmtHorimetro(v) {
+  const t = String(v === null || v === undefined ? '' : v).replace(/\D/g, '');
+  if (t.length < 2) return t;
+  return Number(t.slice(0, -1)).toLocaleString('pt-BR') + ',' + t.slice(-1);
+}
+function htmlHorimetro(v) {
+  return '<strong>' + escapeHtml(fmtHorimetro(v)) + '</strong> <span class="subtle">(digitado ' + escapeHtml(String(v)) + ')</span>';
+}
 function fmtH(v) { return String(Math.round(Number(v) * 10) / 10).replace('.', ',') + 'h'; }
 function confirmarHorimetro(container, o) {
   return new Promise(function (resolve) {
@@ -1679,15 +1696,15 @@ function confirmarHorimetro(container, o) {
 function confirmarFechamentoChecklist(container, inicial, final, campo, antesDe) {
   if (!temValorCampo(inicial)) {
     return confirmarHorimetro(container, { campo: campo, antesDe: antesDe,
-      linhas: ['Horímetro final: <strong>' + escapeHtml(final) + '</strong>', 'Este checklist não tem horímetro inicial — as horas rodadas não serão calculadas.'] });
+      linhas: ['Horímetro final: ' + htmlHorimetro(final), 'Este checklist não tem horímetro inicial — as horas rodadas não serão calculadas.'] });
   }
-  const h = Math.round((Number(final) - Number(inicial)) * 100) / 100;
+  const h = horasHorimetro(final, inicial);
   let alerta = '';
   if (h > HORAS_TURNO_ALERTA) alerta = 'São ' + fmtH(h) + ' num turno só — mais que ' + HORAS_TURNO_ALERTA + 'h. Confira se não digitou um número a mais ou trocou algum dígito.';
   else if (h === 0) alerta = 'Dá 0h: a máquina não rodou nada no turno? Confira o horímetro final.';
   return confirmarHorimetro(container, { campo: campo, antesDe: antesDe, alerta: alerta,
     ok: alerta ? '' : '✓ Dentro do esperado para um turno.',
-    linhas: ['Horímetro inicial: <strong>' + escapeHtml(inicial) + '</strong>', 'Horímetro final: <strong>' + escapeHtml(final) + '</strong>',
+    linhas: ['Horímetro inicial: ' + htmlHorimetro(inicial), 'Horímetro final: ' + htmlHorimetro(final),
       'Total: <strong>' + fmtH(h) + ' rodadas</strong>'] });
 }
 
@@ -1708,7 +1725,7 @@ async function montarChecklistsEmAberto(card) {
     const box = el('<div class="stack" style="gap:8px;padding:12px 0;border-top:1px solid var(--line)"></div>');
     box.appendChild(el('<div><strong style="font-size:15px">' + escapeHtml(c.NOME_EQUIPAMENTO) + '</strong>' +
       '<div class="subtle">' + escapeHtml(c.ID_CHECKLIST) + ' · aberto em ' + fmtDataHora(c.DATA_HORA) +
-      (temValorCampo(c.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(c.HORIMETRO_INICIAL) : '') + '</div></div>'));
+      (temValorCampo(c.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(fmtHorimetro(c.HORIMETRO_INICIAL)) + ' (digitado ' + escapeHtml(c.HORIMETRO_INICIAL) + ')' : '') + '</div></div>'));
     const campo = textField(box, { label: 'Horímetro final', required: true, type: 'text', placeholder: 'Ex: 09540' });
     campo.input.setAttribute('inputmode', 'numeric');
     campo.input.addEventListener('input', function () {
@@ -1767,7 +1784,7 @@ function montarPendenciasFechamento(body, d) {
       area.hidden = !area.hidden;
       if (area.hidden || area.childElementCount) return;
       area.appendChild(el('<p class="subtle">' + escapeHtml(p.ID_CHECKLIST) +
-        (temValorCampo(p.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(p.HORIMETRO_INICIAL) : '') + '</p>'));
+        (temValorCampo(p.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(fmtHorimetro(p.HORIMETRO_INICIAL)) + ' (digitado ' + escapeHtml(p.HORIMETRO_INICIAL) + ')' : '') + '</p>'));
       const campo = textField(area, { label: 'Horímetro final', required: true, type: 'text', placeholder: 'Ex: 09540' });
       campo.input.setAttribute('inputmode', 'numeric');
       campo.input.addEventListener('input', function () {
@@ -1937,7 +1954,7 @@ function montarHorasRodadas(body, checklists, grupoId) {
   checklists.forEach(function (c) {
     if (!temValorCampo(c.FECHADO_EM)) { emAberto++; return; }
     if (!temValorCampo(c.HORIMETRO_INICIAL) || !temValorCampo(c.HORIMETRO_FINAL)) { semHorimetro++; return; }
-    const horas = Math.round((Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL)) * 100) / 100;
+    const horas = horasHorimetro(c.HORIMETRO_FINAL, c.HORIMETRO_INICIAL);
     if (isNaN(horas) || horas < 0) { invalidos++; return; }
     const d = new Date(c.DATA_HORA);
     const chaveDia = isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -2768,12 +2785,12 @@ async function renderChecklistDetalhe() {
     linhaInfo('Equipamento', '<strong>' + escapeHtml(c.NOME_EQUIPAMENTO) + '</strong>') +
     linhaInfo('Responsável', escapeHtml(c.RESPONSAVEL || '—')) +
     linhaInfo('Data/hora', fmtDataHora(c.DATA_HORA)) +
-    (temValorCampo(c.HORIMETRO_INICIAL) ? linhaInfo('Horímetro inicial', '<span class="mono">' + escapeHtml(c.HORIMETRO_INICIAL) + '</span>') : '') +
+    (temValorCampo(c.HORIMETRO_INICIAL) ? linhaInfo('Horímetro inicial', '<span class="mono">' + escapeHtml(fmtHorimetro(c.HORIMETRO_INICIAL)) + '</span>') : '') +
     (temValorCampo(c.FECHADO_EM)
-      ? linhaInfo('Horímetro final', '<span class="mono">' + escapeHtml(c.HORIMETRO_FINAL) + '</span>') +
+      ? linhaInfo('Horímetro final', '<span class="mono">' + escapeHtml(fmtHorimetro(c.HORIMETRO_FINAL)) + '</span>') +
         linhaInfo('Fechado em', fmtDataHora(c.FECHADO_EM)) +
         (temValorCampo(c.HORIMETRO_INICIAL) ? linhaInfo('Horas no turno', '<strong class="mono">' +
-          String(Math.round((Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL)) * 100) / 100).replace('.', ',') + 'h</strong>') : '')
+          fmtH(horasHorimetro(c.HORIMETRO_FINAL, c.HORIMETRO_INICIAL)) + '</strong>') : '')
       : linhaInfo('Fechamento', '<span class="tag tag--nok">Em aberto — falta o horímetro final</span>'))
   );
   if (c.FOTO_EQUIPAMENTO) {
@@ -3120,7 +3137,7 @@ async function renderTrocaGasForm() {
   // Classifica as horas desde a última troca contra o estimado da máquina.
   function avaliarHoras(h) {
     if (h === null) return { alerta: '', ok: '' };
-    if (h < 0) return { alerta: 'O horímetro está MENOR que o da última troca (' + ultimaTroca.HORIMETRO + ') — com certeza tem erro de digitação.', ok: '' };
+    if (h < 0) return { alerta: 'O horímetro está MENOR que o da última troca (' + fmtHorimetro(ultimaTroca.HORIMETRO) + ') — com certeza tem erro de digitação.', ok: '' };
     if (h === 0) return { alerta: 'Dá 0h desde a última troca: o horímetro não andou. Confira o número.', ok: '' };
     if (estimado) {
       if (h > estimado * 1.5) return { alerta: fmtH(h) + ' é bem acima do estimado para esta máquina (~' + fmtH(estimado) + ' por troca). Confira se não digitou um número a mais.', ok: '' };
@@ -3132,9 +3149,7 @@ async function renderTrocaGasForm() {
   }
   function horasCalculadas() {
     if (!ultimaTroca || ultimaTrocaDe !== selEquip.getValue() || !horimetro.getValue()) return null;
-    const ant = Number(ultimaTroca.HORIMETRO), atual = Number(horimetro.getValue());
-    if (isNaN(ant) || isNaN(atual)) return null;
-    return Math.round((atual - ant) * 100) / 100;
+    return horasHorimetro(horimetro.getValue(), ultimaTroca.HORIMETRO);
   }
   function atualizarInfoHoras() {
     if (!selEquip.getValue()) { infoHoras.textContent = ''; return; }
@@ -3143,7 +3158,8 @@ async function renderTrocaGasForm() {
     const nomeReg = eletrica ? 'carga' : 'troca';
     if (!ultimaTroca) { infoHoras.textContent = 'Primeira ' + nomeReg + ' registrada desta frota — não há horímetro anterior para comparar.'; return; }
     const h = horasCalculadas();
-    let texto = 'Última ' + nomeReg + ': horímetro ' + ultimaTroca.HORIMETRO + ' em ' + fmtData(ultimaTroca.DATA_HORA) + '.';
+    let texto = 'Última ' + nomeReg + ': horímetro ' + fmtHorimetro(ultimaTroca.HORIMETRO) + ' em ' + fmtData(ultimaTroca.DATA_HORA) + '.';
+    if (horimetro.getValue()) texto += ' Você digitou ' + fmtHorimetro(horimetro.getValue()) + '.';
     if (!eletrica && estimado) texto += ' Estimado desta máquina: ~' + fmtH(estimado) + ' por troca.';
     // A avaliação contra o estimado é só para gás; carga de bateria só confere se andou para trás.
     const av = eletrica ? { alerta: h !== null && h < 0 ? 'horímetro menor que o da última carga' : '' } : avaliarHoras(h);
@@ -3201,11 +3217,11 @@ async function renderTrocaGasForm() {
     const horas = horasCalculadas();
     // [22/10] Sempre mostra a conta e pergunta se quer continuar.
     if (!horasConfirmadas && horas !== null) {
-      if (horas < 0) { toast('O horímetro não pode ser menor que o da última troca (' + ultimaTroca.HORIMETRO + '). Confira o número.', true); horimetro.input.focus(); return; }
+      if (horas < 0) { toast('O horímetro não pode ser menor que o da última troca (' + fmtHorimetro(ultimaTroca.HORIMETRO) + '). Confira o número.', true); horimetro.input.focus(); return; }
       const av = avaliarHoras(horas);
       const seguir = await confirmarHorimetro(card, { campo: horimetro.input, antesDe: btn, alerta: av.alerta, ok: av.ok,
-        linhas: ['Última troca: horímetro <strong>' + escapeHtml(ultimaTroca.HORIMETRO) + '</strong> em ' + escapeHtml(fmtData(ultimaTroca.DATA_HORA)),
-          'Horímetro agora: <strong>' + escapeHtml(horimetro.getValue()) + '</strong>',
+        linhas: ['Última troca: horímetro ' + htmlHorimetro(ultimaTroca.HORIMETRO) + ' em ' + escapeHtml(fmtData(ultimaTroca.DATA_HORA)),
+          'Horímetro agora: ' + htmlHorimetro(horimetro.getValue()),
           'Total: <strong>' + fmtH(horas) + ' desde a última troca</strong>' + (estimado ? ' · estimado ~' + fmtH(estimado) : '')] });
       if (!seguir) return;
       horasConfirmadas = true;
@@ -3240,7 +3256,7 @@ async function renderTrocaGasForm() {
 
   async function enviarCarregamento() {
     const h = horasCalculadas();
-    if (h !== null && h < 0) { toast('O horímetro não pode ser menor que o da última carga (' + ultimaTroca.HORIMETRO + ')', true); return; }
+    if (h !== null && h < 0) { toast('O horímetro não pode ser menor que o da última carga (' + fmtHorimetro(ultimaTroca.HORIMETRO) + ')', true); return; }
     btn.disabled = true; btn.textContent = 'Enviando…';
     try {
       const res = await api('createCarregamento', {
