@@ -1665,6 +1665,40 @@ function fmtHorimetro(v) {
   if (t.length < 2) return t;
   return Number(t.slice(0, -1)).toLocaleString('pt-BR') + ',' + t.slice(-1);
 }
+// [24/10] Aviso fixo + leitura ao vivo embaixo de cada campo de horímetro do
+// checklist: "digite todos os números, sem vírgula". Se o operador tentar
+// digitar vírgula ou ponto, o caractere é tirado e o aviso fica vermelho.
+function prepararCampoHorimetro(campo) {
+  campo.input.setAttribute('inputmode', 'numeric');
+  campo.input.setAttribute('pattern', '[0-9]*');
+  const aviso = el(
+    '<div class="horimetro-exemplo">' +
+      '<span class="horimetro-exemplo__label">📟 Preencha TODOS os números do visor, sem vírgula (,)</span>' +
+      '<div class="horimetro-exemplo__visor">' +
+        '<span>0</span><span>9</span><span>5</span><span>2</span><span>9</span>' +
+      '</div>' +
+      '<span class="horimetro-exemplo__seta">↓ o último número também entra, tudo junto ↓</span>' +
+      '<div class="horimetro-exemplo__campo">09529</div>' +
+    '</div>');
+  const leitura = el('<p class="subtle" style="margin-top:-2px;font-size:13px" aria-live="polite"></p>');
+  campo.node.appendChild(leitura);
+  campo.node.parentNode.insertBefore(aviso, campo.node.nextSibling);
+  campo.input.addEventListener('input', function () {
+    const bruto = campo.input.value;
+    const limpo = bruto.replace(/[^0-9]/g, '');
+    if (limpo !== bruto) {
+      campo.input.value = limpo;
+      if (/[,.]/.test(bruto)) {
+        leitura.style.color = 'var(--st-risco)';
+        leitura.textContent = '⚠️ Não use vírgula nem ponto: digite todos os números juntos.';
+        return;
+      }
+    }
+    leitura.style.color = '';
+    leitura.textContent = limpo.length > 1 ? 'Leitura no visor: ' + fmtHorimetro(limpo) + ' h' : '';
+  });
+}
+
 function htmlHorimetro(v) {
   return '<strong>' + escapeHtml(fmtHorimetro(v)) + '</strong> <span class="subtle">(digitado ' + escapeHtml(String(v)) + ')</span>';
 }
@@ -1727,11 +1761,7 @@ async function montarChecklistsEmAberto(card) {
       '<div class="subtle">' + escapeHtml(c.ID_CHECKLIST) + ' · aberto em ' + fmtDataHora(c.DATA_HORA) +
       (temValorCampo(c.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(fmtHorimetro(c.HORIMETRO_INICIAL)) + ' (digitado ' + escapeHtml(c.HORIMETRO_INICIAL) + ')' : '') + '</div></div>'));
     const campo = textField(box, { label: 'Horímetro final', required: true, type: 'text', placeholder: 'Ex: 09540' });
-    campo.input.setAttribute('inputmode', 'numeric');
-    campo.input.addEventListener('input', function () {
-      const limpo = campo.input.value.replace(/[^0-9]/g, '');
-      if (limpo !== campo.input.value) campo.input.value = limpo;
-    });
+    prepararCampoHorimetro(campo);
     const btn = el('<button class="btn btn--primary btn--block">✓ Fechar checklist</button>');
     box.appendChild(btn);
     btn.onclick = async function () {
@@ -1786,11 +1816,7 @@ function montarPendenciasFechamento(body, d) {
       area.appendChild(el('<p class="subtle">' + escapeHtml(p.ID_CHECKLIST) +
         (temValorCampo(p.HORIMETRO_INICIAL) ? ' · horímetro inicial ' + escapeHtml(fmtHorimetro(p.HORIMETRO_INICIAL)) + ' (digitado ' + escapeHtml(p.HORIMETRO_INICIAL) + ')' : '') + '</p>'));
       const campo = textField(area, { label: 'Horímetro final', required: true, type: 'text', placeholder: 'Ex: 09540' });
-      campo.input.setAttribute('inputmode', 'numeric');
-      campo.input.addEventListener('input', function () {
-        const limpo = campo.input.value.replace(/[^0-9]/g, '');
-        if (limpo !== campo.input.value) campo.input.value = limpo;
-      });
+      prepararCampoHorimetro(campo);
       const btn = el('<button class="btn btn--primary btn--block">✓ Fechar checklist</button>');
       area.appendChild(btn);
       btn.onclick = async function () {
@@ -2613,11 +2639,7 @@ async function renderChecklistNovo() {
     label: 'Horímetro inicial', required: true, type: 'text', placeholder: 'Ex: 09529',
     hint: 'Horímetro da máquina agora, no início do turno. No fim do turno você fecha este checklist com o horímetro final.'
   });
-  horInicial.input.setAttribute('inputmode', 'numeric');
-  horInicial.input.addEventListener('input', function () {
-    const limpo = horInicial.input.value.replace(/[^0-9]/g, '');
-    if (limpo !== horInicial.input.value) horInicial.input.value = limpo;
-  });
+  prepararCampoHorimetro(horInicial);
 
   card.appendChild(el('<div class="divider"></div>'));
   card.appendChild(el('<h3 class="title-lg">Itens de verificação</h3>'));
