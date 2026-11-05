@@ -490,6 +490,9 @@ function restaurarSessao() {
 }
 
 function ehAdmin() { return S.usuario && S.usuario.TIPO === 'ADMIN'; }
+// [PERMISSÃO DE GÁS NOV/2026] Só fica sem acesso quem tem NAO na coluna
+// PERMISSAO_GAS; SIM ou em branco continua podendo (padrão).
+function podeTrocarGas() { return !(S.usuario && S.usuario.PERMISSAO_GAS === 'NAO'); }
 
 // ------------------------- HELPERS DE UI -------------------------
 
@@ -1140,7 +1143,7 @@ function updateChrome() {
   }
 
   tabbar.hidden = false;
-  const tabs = ehAdmin()
+  let tabs = ehAdmin()
     ? [
         { s: 'painel', ic: '📊', label: 'Painel' },
         { s: 'manutencoes', ic: '🔧', label: 'Manutenções' },
@@ -1160,6 +1163,11 @@ function updateChrome() {
         { s: 'trocaGasForm', ic: '⛽', label: 'Gás / Bateria' },
         { s: 'mais', ic: '☰', label: 'Mais' }
       ];
+  // [PERMISSÃO DE GÁS NOV/2026] Operador com PERMISSAO_GAS = NAO na aba
+  // CONFIG_USUARIOS não vê o ícone de Gás / Bateria.
+  if (!podeTrocarGas()) {
+    tabs = tabs.filter(function (t) { return t.s !== 'trocaGasForm'; });
+  }
   let ativa = TAB_PAI[S.screen] || S.screen;
   // Tela que não tem aba própria neste perfil (ex: Preventivas e Histórico,
   // que ficam dentro de "Mais" para os dois perfis) acende a aba "Mais".
@@ -3080,6 +3088,11 @@ async function renderLavagemForm() {
 // ------------------------- TROCA DE GÁS -------------------------
 
 async function renderTrocaGasForm() {
+  if (!podeTrocarGas()) {
+    appendHtml(app, screenHeader('Gás / Bateria', 'Sem permissão',
+      'Seu usuário não tem permissão para registrar troca de gás. Fale com o administrador.'));
+    return;
+  }
   appendHtml(app, screenHeader('Gás / Bateria', 'Troca de gás ou carga de bateria',
     'Escolha a frota: a combustão registra troca de gás; elétrica registra carregamento da bateria.'));
 
