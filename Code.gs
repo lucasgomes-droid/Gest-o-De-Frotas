@@ -366,6 +366,7 @@ function sessaoDoUsuario_(usuario) {
     USUARIO: usuario.USUARIO,
     TIPO: String(usuario.TIPO || 'OPERADOR').toUpperCase(),
     UNIDADE: usuario.UNIDADE,
+    PERMISSAO_GAS: permissaoGas_(usuario),
     SETOR: setorDoUsuario_(usuario) // '' = os dois setores
   };
 }
@@ -2764,6 +2765,7 @@ function ultimaTrocaGasDaFrota_(idEquipamento) {
 const LIMITE_HORAS_ENTRE_TROCAS = 25;
 
 function criarTrocaGas_(p) {
+  exigirPermissaoGas_(p.idUsuario);
   const unidade = exigirUnidade_(p.unidade);
   validarAcessoUnidade_(p.idUsuario, unidade);
 
@@ -6150,4 +6152,35 @@ function removerResumoDiarioChecklists() {
     if (t.getHandlerFunction() === 'enviarResumoChecklistsPendentes') ScriptApp.deleteTrigger(t);
   });
   return 'Resumo diário desligado.';
+}
+
+// ======================= PERMISSÃO DE TROCA DE GÁS (NOV/2026) =======================
+// Coluna PERMISSAO_GAS na aba CONFIG_USUARIOS (pode ficar em qualquer posição).
+// NAO = o operador não vê o ícone "Gás / Bateria" e o servidor recusa
+// troca de gás vinda dele. SIM ou em branco = pode (padrão).
+// Aceita "não", "Nao", "NÃO", "N"... e também cabeçalho com acento
+// ("PERMISSÃO_GAS") ou com espaço ("Permissão troca de gás").
+function permissaoGas_(usuario) {
+  const semAcento = function (t) {
+    return String(t === undefined || t === null ? '' : t)
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+  };
+  const chave = Object.keys(usuario || {}).find(function (k) {
+    const n = semAcento(k).replace(/[^A-Z]/g, '');
+    return n.indexOf('PERMISSAO') > -1 && n.indexOf('GAS') > -1;
+  });
+  if (!chave) return 'SIM';
+  const v = semAcento(usuario[chave]);
+  return (v === 'NAO' || v === 'N') ? 'NAO' : 'SIM';
+}
+
+// Barra a troca de gás de quem está com NAO. Administrador não é barrado.
+function exigirPermissaoGas_(idUsuario) {
+  if (!idUsuario) return;
+  const usuario = getUsuariosCache_().find(function (u) { return String(u.ID_USUARIO) === String(idUsuario); });
+  if (!usuario) return;
+  if (String(usuario.TIPO || 'OPERADOR').toUpperCase() === 'ADMIN') return;
+  if (permissaoGas_(usuario) === 'NAO') {
+    throw new Error('Este usuário não tem permissão para registrar troca de gás. Fale com o administrador.');
+  }
 }
