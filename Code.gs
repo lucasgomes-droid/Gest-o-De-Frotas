@@ -6163,7 +6163,7 @@ function removerResumoDiarioChecklists() {
 function permissaoGas_(usuario) {
   const semAcento = function (t) {
     return String(t === undefined || t === null ? '' : t)
-      .normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
   };
   const chave = Object.keys(usuario || {}).find(function (k) {
     const n = semAcento(k).replace(/[^A-Z]/g, '');
