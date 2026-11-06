@@ -1875,25 +1875,47 @@ function montarPendenciasFechamento(body, d) {
 
 // ------------------------- HORAS RODADAS -------------------------
 // Tempo que cada máquina rodou, calculado pelo checklist: horímetro final
-// (fechamento) − horímetro inicial (abertura). Cada checklist fechado é um
-// turno, contado no dia em que foi aberto.
+// (fechamento) − inicial (abertura). Cada checklist fechado é um turno,
+// contado no dia em que foi aberto.
+// [06/11] Duas abas com leitura própria:
+//  · Operação (empilhadeiras e paleteiras) → tempo de operação.
+//  · Limpeza (lavadoras) → qualidade da limpeza: em quantos dias o piso foi
+//    lavado, por quanto tempo, e quais dias ficaram sem limpeza.
 const COLUNAS_HORAS_RODADAS = [
   ['dia', 'Data'], ['NOME_EQUIPAMENTO', 'Máquina'], ['RESPONSAVEL', 'Operador'],
   ['HORIMETRO_INICIAL', 'Horímetro inicial'], ['HORIMETRO_FINAL', 'Horímetro final'],
   ['horas', 'Horas rodadas', function (v) { return String(v).replace('.', ','); }]
 ];
 
+const GRUPOS_HORAS = [
+  { id: 'EMPILHADEIRA', aba: 'Operação', rotulo: 'Empilhadeiras e paleteiras', ic: '🚜',
+    finalidade: 'Tempo de operação: quanto cada máquina trabalhou no período.' },
+  { id: 'LAVADORA', aba: 'Limpeza', rotulo: 'Lavadoras de piso', ic: '🧽',
+    finalidade: 'Qualidade da limpeza: em quais dias o piso foi lavado e por quanto tempo.' },
+  { id: 'OUTROS', aba: 'Outros', rotulo: 'Outros equipamentos', ic: '🔧',
+    finalidade: 'Equipamentos que não são empilhadeira, paleteira nem lavadora.' }
+];
+function grupoDoTipo(tipo) {
+  const t = String(tipo || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  if (t.indexOf('lavadora') > -1) return 'LAVADORA';
+  if (t.indexOf('empilhadeira') > -1 || t.indexOf('paleteira') > -1) return 'EMPILHADEIRA';
+  return 'OUTROS';
+}
+
+function isoDia(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 async function renderHorasRodadas() {
   appendHtml(app, screenHeader('Horas rodadas', 'Tempo de máquina rodando',
     'Horímetro final − inicial de cada checklist · ' + unidadeSetorLabel()));
   app.appendChild(botaoVoltar('mais'));
 
-  const hojeIso = function () {
-    const d = new Date();
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  };
+  const abas = el('<div class="hr-tabs" role="tablist"></div>');
+  app.appendChild(abas);
+
   const topo = el(
-    '<div class="stack" style="gap:8px">' +
+    '<div class="stack" style="gap:8px;margin-top:10px">' +
       '<div class="filters">' +
         '<select data-role="periodo">' +
           '<option value="hoje">Hoje</option>' +
@@ -1902,9 +1924,6 @@ async function renderHorasRodadas() {
           '<option value="todos">Todo o período</option>' +
           '<option value="custom">Período personalizado</option>' +
         '</select>' +
-        '<select data-role="grupo"><option value="">Empilhadeiras e lavadoras</option>' +
-          '<option value="EMPILHADEIRA">Só empilhadeiras</option><option value="LAVADORA">Só lavadoras</option>' +
-          '<option value="OUTROS">Outros equipamentos</option></select>' +
         '<select data-role="equip"><option value="">Todas as máquinas</option></select>' +
       '</div>' +
       '<div class="filters" data-role="custom" hidden>' +
@@ -1920,7 +1939,6 @@ async function renderHorasRodadas() {
   app.appendChild(topo);
   const selPeriodo = topo.querySelector('[data-role="periodo"]');
   const selEquip = topo.querySelector('[data-role="equip"]');
-  const selGrupo = topo.querySelector('[data-role="grupo"]');
   const custom = topo.querySelector('[data-role="custom"]');
   const ini = topo.querySelector('[data-role="ini"]'), fim = topo.querySelector('[data-role="fim"]');
   selPeriodo.value = 'semana';
@@ -1931,28 +1949,73 @@ async function renderHorasRodadas() {
   const equips = await carregarEquipamentos(true);
   const grupoPorEquip = {};
   equips.forEach(function (e) { grupoPorEquip[String(e.ID_EQUIPAMENTO)] = grupoDoTipo(e.TIPO); });
+  const ativosDoGrupo = function (g) {
+    return equips.filter(function (e) { return grupoPorEquip[String(e.ID_EQUIPAMENTO)] === g && String(e.STATUS || '') !== 'inativo'; });
+  };
+  // A aba "Outros" só aparece se a unidade tiver algum equipamento assim.
+  const gruposVisiveis = GRUPOS_HORAS.filter(function (g) { return g.id !== 'OUTROS' || ativosDoGrupo('OUTROS').length; });
+  if (!gruposVisiveis.some(function (g) { return g.id === S.horasAba; })) S.horasAba = 'EMPILHADEIRA';
+  const grupoAtual = function () { return GRUPOS_HORAS.filter(function (g) { return g.id === S.horasAba; })[0]; };
+
+  const desenharAbas = function () {
+    abas.innerHTML = '';
+    gruposVisiveis.forEach(function (g) {
+      const b = el('<button type="button" role="tab" class="hr-tab hr-tab--' + g.id.toLowerCase() + (g.id === S.horasAba ? ' is-active' : '') + '">' +
+        '<span class="hr-tab__ic">' + g.ic + '</span>' +
+        '<span class="hr-tab__txt"><strong>' + escapeHtml(g.aba) + '</strong><small>' + escapeHtml(g.rotulo) + '</small></span></button>');
+      b.onclick = function () {
+        if (S.horasAba === g.id) return;
+        S.horasAba = g.id; desenharAbas(); preencherEquips(); load();
+      };
+      abas.appendChild(b);
+    });
+  };
   const preencherEquips = function () {
     selEquip.innerHTML = '<option value="">Todas as máquinas</option>';
-    equips.filter(function (e) { return !selGrupo.value || grupoPorEquip[String(e.ID_EQUIPAMENTO)] === selGrupo.value; })
+    equips.filter(function (e) { return grupoPorEquip[String(e.ID_EQUIPAMENTO)] === S.horasAba; })
       .forEach(function (e) { selEquip.appendChild(el('<option value="' + escapeHtml(e.ID_EQUIPAMENTO) + '">' + escapeHtml(e.NOME) + '</option>')); });
   };
+  desenharAbas();
   preencherEquips();
 
   selPeriodo.onchange = function () { custom.hidden = selPeriodo.value !== 'custom'; if (selPeriodo.value !== 'custom') load(); };
   selEquip.onchange = load;
-  selGrupo.onchange = function () { preencherEquips(); load(); };
   const filtroAtual = function () {
     const p = selPeriodo.value;
-    return p === 'hoje' ? { periodo: 'custom', dataInicio: hojeIso(), dataFim: hojeIso() }
+    const hoje = isoDia(new Date());
+    return p === 'hoje' ? { periodo: 'custom', dataInicio: hoje, dataFim: hoje }
       : p === 'custom' ? { periodo: 'custom', dataInicio: ini.value || undefined, dataFim: fim.value || undefined }
       : { periodo: p };
   };
+  // Dias do período (para achar os dias sem uso). "Todo o período" começa no
+  // primeiro turno encontrado.
+  const diasDoPeriodo = function (turnos) {
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    let a, b = new Date(hoje);
+    const p = selPeriodo.value;
+    if (p === 'hoje') a = new Date(hoje);
+    else if (p === 'semana') { a = new Date(hoje); a.setDate(a.getDate() - 6); }
+    else if (p === 'mes') { a = new Date(hoje); a.setDate(a.getDate() - 29); }
+    else if (p === 'custom') {
+      a = ini.value ? new Date(ini.value + 'T00:00:00') : null;
+      b = fim.value ? new Date(fim.value + 'T00:00:00') : new Date(hoje);
+    }
+    if (!a) {
+      const chaves = turnos.map(function (t) { return t.chaveDia; }).filter(Boolean).sort();
+      if (!chaves.length) return [];
+      a = new Date(chaves[0] + 'T00:00:00');
+    }
+    const lista = [];
+    for (const d = new Date(a); d <= b && lista.length < 400; d.setDate(d.getDate() + 1)) lista.push(isoDia(d));
+    return lista;
+  };
+
   const pdf = async function (btn, enviar) {
     const rotulo = btn.textContent;
     btn.disabled = true; btn.textContent = enviar ? 'Enviando…' : 'Gerando PDF…';
     try {
       const res = await api('gerarHorasRodadasPDF', Object.assign({
-        unidade: S.unidade.UNIDADE, idEquipamento: selEquip.value || undefined,
+        unidade: S.unidade.UNIDADE, idEquipamento: selEquip.value || undefined, grupo: S.horasAba,
         geradoPor: S.usuario.NOME, enviarEmail: enviar || undefined
       }, filtroAtual()));
       if (enviar) toast('PDF enviado para ' + (res.enviadoPara || []).length + ' e-mail(s) da unidade.', false, true);
@@ -1970,41 +2033,25 @@ async function renderHorasRodadas() {
     load();
   };
 
+  let pedido = 0;
   async function load() {
+    const meu = ++pedido;
     body.innerHTML = '<p class="subtle">Carregando…</p>';
     const lista = await api('getChecklists', Object.assign({
       unidade: S.unidade.UNIDADE, idEquipamento: selEquip.value || undefined
     }, filtroAtual())).catch(function () { return null; });
+    if (meu !== pedido) return;
     body.innerHTML = '';
     if (lista === null) { body.appendChild(el(blocoFalhaCarregar())); return; }
-    const doGrupo = lista.filter(function (c) { return !selGrupo.value || (grupoPorEquip[String(c.ID_EQUIPAMENTO)] || 'OUTROS') === selGrupo.value; });
-    if (selGrupo.value) { montarHorasRodadas(body, doGrupo); return; }
-    // Sem filtro de tipo: um bloco para cada tipo, um embaixo do outro.
-    let algum = false;
-    GRUPOS_HORAS.forEach(function (g) {
-      const doTipo = lista.filter(function (c) { return (grupoPorEquip[String(c.ID_EQUIPAMENTO)] || 'OUTROS') === g.id; });
-      if (!doTipo.length) return;
-      algum = true;
-      body.appendChild(el('<h3 class="title-lg" style="margin-top:10px">' + g.ic + ' ' + g.rotulo + '</h3>'));
-      const sec = el('<div class="stack"></div>');
-      body.appendChild(sec);
-      montarHorasRodadas(sec, doTipo, g.id);
-    });
-    if (!algum) montarHorasRodadas(body, []);
+    const g = grupoAtual();
+    const doGrupo = lista.filter(function (c) { return (grupoPorEquip[String(c.ID_EQUIPAMENTO)] || 'OUTROS') === g.id; });
+    // Máquinas que deveriam aparecer mesmo sem rodar (para mostrar "não rodou").
+    const frota = selEquip.value
+      ? equips.filter(function (e) { return String(e.ID_EQUIPAMENTO) === selEquip.value; })
+      : ativosDoGrupo(g.id);
+    montarHorasRodadas(body, doGrupo, g, frota, diasDoPeriodo);
   }
   load();
-}
-
-const GRUPOS_HORAS = [
-  { id: 'EMPILHADEIRA', rotulo: 'Empilhadeiras', ic: '🚜' },
-  { id: 'LAVADORA', rotulo: 'Lavadoras', ic: '🧽' },
-  { id: 'OUTROS', rotulo: 'Outros equipamentos', ic: '🔧' }
-];
-function grupoDoTipo(tipo) {
-  const t = String(tipo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  if (t.indexOf('empilhadeira') > -1) return 'EMPILHADEIRA';
-  if (t.indexOf('lavadora') > -1) return 'LAVADORA';
-  return 'OUTROS';
 }
 
 // [28/10] Horas do turno: a coluna HORAS_RODADAS (refeita pelo servidor a
@@ -2023,9 +2070,10 @@ function horasDoChecklist(c) {
   return h === null || isNaN(h) || h < 0 || h > 24 ? null : h;
 }
 
-function montarHorasRodadas(body, checklists, grupoId) {
+function montarHorasRodadas(body, checklists, grupo, frota, diasDoPeriodo) {
+  const limpeza = grupo.id === 'LAVADORA';
   const hh = function (v) { return String(Math.round(v * 10) / 10).replace('.', ',') + 'h'; };
-  const turnos = [];      // checklists fechados com os dois horímetros
+  const turnos = [];
   let emAberto = 0, semHorimetro = 0, invalidos = 0;
   checklists.forEach(function (c) {
     if (!temValorCampo(c.FECHADO_EM)) { emAberto++; return; }
@@ -2033,30 +2081,61 @@ function montarHorasRodadas(body, checklists, grupoId) {
     const horas = horasDoChecklist(c);
     if (horas === null) { invalidos++; return; }
     const d = new Date(c.DATA_HORA);
-    const chaveDia = isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    turnos.push(Object.assign({}, c, { horas: horas, chaveDia: chaveDia, dia: fmtData(c.DATA_HORA) }));
+    turnos.push(Object.assign({}, c, { horas: horas, chaveDia: isNaN(d) ? '' : isoDia(d), dia: fmtData(c.DATA_HORA) }));
   });
 
+  // ---- agregados ----
   const total = turnos.reduce(function (s, t) { return s + t.horas; }, 0);
-  const porMaquina = {}, porDia = {};
+  const porMaquina = {}, porDia = {}, celula = {};
+  (frota || []).forEach(function (e) {
+    porMaquina[String(e.ID_EQUIPAMENTO)] = { id: String(e.ID_EQUIPAMENTO), nome: e.NOME, horas: 0, turnos: 0, dias: {} };
+  });
   turnos.forEach(function (t) {
     const k = String(t.ID_EQUIPAMENTO);
-    if (!porMaquina[k]) porMaquina[k] = { nome: t.NOME_EQUIPAMENTO, horas: 0, turnos: 0, dias: {} };
+    if (!porMaquina[k]) porMaquina[k] = { id: k, nome: t.NOME_EQUIPAMENTO, horas: 0, turnos: 0, dias: {} };
     porMaquina[k].horas += t.horas; porMaquina[k].turnos++; porMaquina[k].dias[t.chaveDia] = true;
-    if (!porDia[t.chaveDia]) porDia[t.chaveDia] = { rotulo: t.dia, horas: 0, turnos: 0 };
+    if (!porDia[t.chaveDia]) porDia[t.chaveDia] = { horas: 0, turnos: 0 };
     porDia[t.chaveDia].horas += t.horas; porDia[t.chaveDia].turnos++;
+    celula[k + '|' + t.chaveDia] = (celula[k + '|' + t.chaveDia] || 0) + t.horas;
   });
-  const maquinas = Object.keys(porMaquina).map(function (k) { return porMaquina[k]; }).sort(function (a, b) { return b.horas - a.horas; });
-  const dias = Object.keys(porDia).sort().reverse().map(function (k) { return porDia[k]; });
+  const maquinas = Object.keys(porMaquina).map(function (k) { return porMaquina[k]; })
+    .sort(function (a, b) { return b.horas - a.horas || String(a.nome).localeCompare(String(b.nome)); });
+  const rodaram = maquinas.filter(function (m) { return m.turnos > 0; });
+  const diasPeriodo = diasDoPeriodo(turnos);
+  // Domingo não conta como "dia sem uso"; hoje ainda está em andamento.
+  const hojeK = isoDia(new Date());
+  const diasUteis = diasPeriodo.filter(function (k) { return new Date(k + 'T00:00:00').getDay() !== 0 && k !== hojeK; });
+  const diasComUso = diasPeriodo.filter(function (k) { return porDia[k]; });
+  // Limpeza: cada lavadora em cada dia útil é uma limpeza prevista.
+  const faltas = [];
+  maquinas.forEach(function (m) {
+    diasUteis.forEach(function (k) { if (!celula[m.id + '|' + k]) faltas.push({ nome: m.nome, k: k }); });
+  });
+  const previstas = maquinas.length * diasUteis.length;
+  // ---- faixa de finalidade ----
+  body.appendChild(el('<div class="hr-banner hr-banner--' + grupo.id.toLowerCase() + '">' +
+    '<span class="hr-banner__ic">' + grupo.ic + '</span><div><strong>' + escapeHtml(grupo.rotulo) + '</strong>' +
+    '<p>' + escapeHtml(grupo.finalidade) + '</p></div></div>'));
 
-  body.appendChild(el(
-    '<div class="kpi-grid">' +
-      kpi(hh(total), 'Horas rodadas', 'kpi--accent') +
-      kpi(turnos.length, 'Turnos fechados', 'kpi--uso') +
-      kpi(maquinas.length, 'Máquinas que rodaram') +
-      kpi(dias.length ? hh(total / dias.length) : '—', 'Média por dia') +
-    '</div>'
-  ));
+  // ---- indicadores ----
+  if (limpeza) {
+    const feitas = previstas - faltas.length;
+    const cobertura = previstas ? Math.round(feitas / previstas * 100) : 0;
+    body.appendChild(el('<div class="kpi-grid hr-kpis">' +
+      kpi(previstas ? cobertura + '%' : '—', 'Rotina cumprida (' + feitas + ' de ' + previstas + ' dias)',
+        cobertura >= 90 ? 'kpi--uso' : cobertura >= 70 ? 'kpi--accent' : 'kpi--parado') +
+      kpi(faltas.length, 'Dias sem limpeza', faltas.length ? 'kpi--parado' : 'kpi--uso') +
+      kpi(hh(total), 'Horas de limpeza', 'kpi--lav') +
+      kpi(turnos.length ? hh(total / turnos.length) : '—', 'Média por limpeza') +
+    '</div>'));
+  } else {
+    body.appendChild(el('<div class="kpi-grid hr-kpis">' +
+      kpi(hh(total), 'Horas de operação', 'kpi--accent') +
+      kpi(diasComUso.length ? hh(total / diasComUso.length) : '—', 'Média por dia trabalhado') +
+      kpi(rodaram.length + (maquinas.length ? ' de ' + maquinas.length : ''), 'Máquinas que operaram', 'kpi--uso') +
+      kpi(turnos.length, 'Turnos fechados') +
+    '</div>'));
+  }
 
   if (emAberto || semHorimetro || invalidos) {
     body.appendChild(el('<div class="note warn">Fora da conta neste período: ' +
@@ -2064,42 +2143,92 @@ function montarHorasRodadas(body, checklists, grupoId) {
        semHorimetro ? semHorimetro + ' sem horímetro inicial (feitos antes de ser obrigatório)' : '',
        invalidos ? invalidos + ' com horímetro final menor que o inicial' : ''].filter(Boolean).join(' · ') + '.</div>'));
   }
-  if (!turnos.length) {
+  if (!turnos.length && !maquinas.length) {
     body.appendChild(el('<div class="card"><p class="subtle">Nenhum checklist fechado com horímetro neste período. ' +
       'As horas aparecem depois que o operador fecha o checklist com o horímetro final.</p></div>'));
     return;
   }
 
-  function barras(titulo, subtitulo, itens, rotulo, valor, texto) {
-    const card = el('<div class="card stack"><h3 class="title-lg">' + titulo + '</h3>' +
-      '<p class="subtle" style="margin-top:-6px">' + escapeHtml(subtitulo) + '</p></div>');
-    const max = Math.max.apply(null, itens.map(valor).concat([0])) || 1;
-    itens.forEach(function (i) {
-      card.appendChild(el(
-        '<div class="bar-row"><span class="label" style="width:130px">' + escapeHtml(rotulo(i)) + '</span>' +
-        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, (valor(i) / max) * 100) + '%"></div></div>' +
-        '<span class="bar-val" style="width:auto;min-width:110px">' + escapeHtml(texto(i)) + '</span></div>'
-      ));
-    });
-    body.appendChild(card);
-  }
-  barras('🚜 Horas por máquina', 'Total no período, turnos fechados e média por dia trabalhado', maquinas,
-    function (m) { return m.nome; }, function (m) { return m.horas; },
-    function (m) { return hh(m.horas) + ' · ' + m.turnos + ' turno(s) · ' + hh(m.horas / Object.keys(m.dias).length) + '/dia'; });
-  barras('📅 Horas por dia', 'Soma de todas as máquinas em cada dia', dias.slice(0, 31),
-    function (d) { return d.rotulo; }, function (d) { return d.horas; },
-    function (d) { return hh(d.horas) + ' · ' + d.turnos + ' turno(s)'; });
+  // ---- horas por máquina ----
+  const cardMaq = el('<div class="card stack"><h3 class="title-lg">' + grupo.ic + ' ' + (limpeza ? 'Limpeza por lavadora' : 'Horas de operação por máquina') + '</h3>' +
+    '<p class="subtle" style="margin-top:-6px">' + (limpeza
+      ? 'Horas lavando, quantas limpezas e em quantos dias a lavadora foi usada'
+      : 'Total no período, turnos fechados e média por dia trabalhado') + '</p></div>');
+  const maxM = Math.max.apply(null, maquinas.map(function (m) { return m.horas; }).concat([0])) || 1;
+  maquinas.forEach(function (m) {
+    const nDias = Object.keys(m.dias).length;
+    const txt = !m.turnos ? (limpeza ? 'sem limpeza' : 'não operou')
+      : limpeza ? hh(m.horas) + ' · ' + m.turnos + ' limpeza(s) · ' + nDias + ' dia(s)'
+      : hh(m.horas) + ' · ' + m.turnos + ' turno(s) · ' + hh(m.horas / nDias) + '/dia';
+    cardMaq.appendChild(el(
+      '<div class="bar-row' + (m.turnos ? '' : ' is-zero') + '"><span class="label" style="width:150px" title="' + escapeHtml(m.nome) + '">' + escapeHtml(m.nome) + '</span>' +
+      '<div class="bar-track"><div class="bar-fill' + (limpeza ? ' bar-fill--lav' : '') + '" style="width:' + (m.turnos ? Math.max(4, (m.horas / maxM) * 100) : 0) + '%"></div></div>' +
+      '<span class="bar-val" style="width:auto;min-width:130px">' + escapeHtml(txt) + '</span></div>'));
+  });
+  body.appendChild(cardMaq);
 
-  const cardTab = el('<div class="card stack"><h3 class="title-lg">Turno a turno</h3></div>');
+  // ---- mapa máquina × dia ----
+  const diasMapa = diasPeriodo.slice(-31);
+  if (diasMapa.length > 1 && maquinas.length) {
+    const sem = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+    const maxC = Math.max.apply(null, Object.keys(celula).map(function (k) { return celula[k]; }).concat([0])) || 1;
+    let html = '<table class="hr-map hr-map--' + grupo.id.toLowerCase() + '"><thead><tr><th class="hr-map__nome">Máquina</th>';
+    diasMapa.forEach(function (k) {
+      const d = new Date(k + 'T00:00:00');
+      html += '<th class="' + (d.getDay() === 0 ? 'is-dom' : '') + '"><span>' + sem[d.getDay()] + '</span>' + String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '</th>';
+    });
+    html += '<th>Total</th></tr></thead><tbody>';
+    maquinas.forEach(function (m) {
+      html += '<tr><td class="hr-map__nome">' + escapeHtml(m.nome) + '</td>';
+      diasMapa.forEach(function (k) {
+        const v = celula[m.id + '|' + k];
+        const dom = new Date(k + 'T00:00:00').getDay() === 0;
+        if (v) {
+          const n = Math.min(4, Math.max(1, Math.ceil((v / maxC) * 4)));
+          html += '<td class="hr-c n' + n + '">' + String(Math.round(v * 10) / 10).replace('.', ',') + '</td>';
+        } else {
+          const falta = limpeza && !dom && k !== hojeK;
+          html += '<td class="hr-c ' + (dom ? 'is-dom' : falta ? 'is-falta' : 'is-vazio') + '">' + (dom ? '' : falta ? '✕' : '–') + '</td>';
+        }
+      });
+      html += '<td class="hr-map__tot">' + hh(m.horas) + '</td></tr>';
+    });
+    html += '<tr class="hr-map__soma"><td class="hr-map__nome">Total do dia</td>';
+    diasMapa.forEach(function (k) { html += '<td>' + (porDia[k] ? String(Math.round(porDia[k].horas * 10) / 10).replace('.', ',') : '') + '</td>'; });
+    html += '<td class="hr-map__tot">' + hh(total) + '</td></tr></tbody></table>';
+
+    const cardMapa = el('<div class="card stack"><h3 class="title-lg">📅 ' + (limpeza ? 'Calendário de limpeza' : 'Mapa de operação') + '</h3>' +
+      '<p class="subtle" style="margin-top:-6px">' + (limpeza
+        ? 'Horas de limpeza por lavadora em cada dia. ✕ vermelho = dia sem limpeza (domingo e hoje não contam).'
+        : 'Horas de operação por máquina em cada dia — quanto mais escuro, mais horas.') +
+      (diasPeriodo.length > 31 ? ' Mostrando os últimos 31 dias.' : '') + '</p></div>');
+    const sc = el('<div class="table-scroll"></div>');
+    sc.innerHTML = html;
+    cardMapa.appendChild(sc);
+    body.appendChild(cardMapa);
+  }
+
+  // ---- dias sem limpeza, por lavadora ----
+  if (limpeza && faltas.length) {
+    const porLav = {};
+    faltas.forEach(function (f) { const p = f.k.split('-'); (porLav[f.nome] = porLav[f.nome] || []).push(p[2] + '/' + p[1]); });
+    body.appendChild(el('<div class="note warn"><strong>Dias sem limpeza:</strong><br>' +
+      Object.keys(porLav).map(function (n) { return '<strong>' + escapeHtml(n) + '</strong> — ' + porLav[n].join(', '); }).join('<br>') + '</div>'));
+  }
+
+  if (!turnos.length) return;
+
+  // ---- turno a turno ----
+  const cardTab = el('<div class="card stack"><h3 class="title-lg">' + (limpeza ? 'Limpeza a limpeza' : 'Turno a turno') + '</h3></div>');
   body.appendChild(cardTab);
   const linhas = turnos.slice().sort(function (a, b) { return a.chaveDia < b.chaveDia ? 1 : a.chaveDia > b.chaveDia ? -1 : String(a.NOME_EQUIPAMENTO).localeCompare(String(b.NOME_EQUIPAMENTO)); });
   const btnCsv = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start">⬇ Exportar CSV</button>');
-  btnCsv.onclick = function () { downloadCSV(nomeArquivo('horas_rodadas' + (grupoId ? '_' + grupoId.toLowerCase() : ''), 'csv'), COLUNAS_HORAS_RODADAS, linhas); };
+  btnCsv.onclick = function () { downloadCSV(nomeArquivo('horas_rodadas_' + (limpeza ? 'limpeza' : grupo.id === 'EMPILHADEIRA' ? 'operacao' : 'outros'), 'csv'), COLUNAS_HORAS_RODADAS, linhas); };
   cardTab.appendChild(btnCsv);
   const scroll = el('<div class="table-scroll"></div>');
   scroll.appendChild(tabelaHtml(COLUNAS_HORAS_RODADAS, linhas.slice(0, 60)));
   cardTab.appendChild(scroll);
-  if (linhas.length > 60) cardTab.appendChild(el('<p class="subtle">Mostrando os 60 mais recentes de ' + linhas.length + ' turno(s). O CSV traz tudo.</p>'));
+  if (linhas.length > 60) cardTab.appendChild(el('<p class="subtle">Mostrando os 60 mais recentes de ' + linhas.length + '. O CSV traz tudo.</p>'));
 }
 
 // ------------------------- PERGUNTAS (CHECKLIST / LAVAGEM) -------------------------
