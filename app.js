@@ -1042,6 +1042,7 @@ const SCREENS = {
   configuracoes: renderConfiguracoes,
   perguntas: renderPerguntas,
   horasRodadas: renderHorasRodadas,
+  relatorioMensal: renderRelatorioMensal,
   mais: renderMais
 };
 
@@ -1055,13 +1056,14 @@ const TAB_PAI = {
   equipamentos: 'mais',
   configuracoes: 'mais',
   perguntas: 'mais',
-  horasRodadas: 'mais'
+  horasRodadas: 'mais',
+  relatorioMensal: 'mais'
 };
 
 // Telas restritas ao ADMIN — trava mesmo se alguém forçar a navegação.
 // "mais" NÃO entra aqui: o Operador também acessa (Preventivas/Histórico),
 // só que com um conteúdo diferente — ver renderMais().
-const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'prestadores', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'horasRodadas', 'visaoGeral'];
+const SCREENS_ADMIN = ['equipamentos', 'equipamentoForm', 'naoConformidades', 'prestadores', 'relatorios', 'relatorioGas', 'relatorioExecutivo', 'configuracoes', 'perguntas', 'horasRodadas', 'relatorioMensal', 'visaoGeral'];
 
 function render() {
   // [ESTABILIDADE OUT/2026] Cada troca de tela ganha um número; as leituras
@@ -6121,6 +6123,7 @@ function renderMais() {
       menuCard('✅', 'Checklists realizados', 'Consultar os checklists feitos pelos operadores', 'checklists') +
       menuCard('🕘', 'Histórico', 'Linha do tempo da unidade', 'historico') +
       menuCard('⏱️', 'Horas rodadas', 'Tempo que cada máquina rodou, pelo horímetro do checklist', 'horasRodadas') +
+      menuCard('🖨️', 'Apresentação mensal', 'Slides de segurança do mês para imprimir ou salvar em PDF', 'relatorioMensal') +
       menuCard('📝', 'Perguntas', 'Perguntas do checklist e da lavagem, por tipo de equipamento', 'perguntas') +
       menuCard('👥', 'Usuários', 'Criar e remover logins de administrador e operador', 'configuracoes') +
     '</div>'
@@ -6273,3 +6276,412 @@ async function renderConfiguracoes() {
 
 restaurarSessao();
 render();
+
+// ======================= RELATÓRIO MENSAL EM SLIDES =======================
+// [NOV/2026] Apresentação mensal para a reunião de gestores: slides 16:9 no
+// visual ICC, montados no próprio navegador com os dados que o app já busca.
+// Botão "Imprimir / salvar PDF" usa a impressão do navegador (uma página por
+// slide). Nada disso depende do Apps Script além das leituras de sempre.
+const RM = {
+  W: 1280, H: 720,
+  VERDE: '#436722', VERDE2: '#5E9030', VCLARO: '#B9D697', TINT: '#EEF4E7',
+  LARANJA: '#DF8630', LARANJA_C: '#FDF1E4', VERM: '#C0392B', VERM_C: '#FBE9E7',
+  TXT: '#1F2937', CINZA: '#5B6472', CINZA_C: '#E3E7EC',
+  LOGO: 'logo.png'
+};
+const RM_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+function rmEsc(v) { return escapeHtml(v === null || v === undefined ? '' : String(v)); }
+function rmNum(v, casas) {
+  const n = Number(v) || 0;
+  const f = Math.pow(10, casas || 0);
+  return String(Math.round(n * f) / f).replace('.', ',');
+}
+// Data em qualquer formato que as planilhas devolvem: ISO, dd/mm/aaaa
+// (com ou sem hora) ou objeto Date.
+function rmData(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) return isNaN(v) ? null : v;
+  const s = String(v).trim();
+  const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T,]+(\d{1,2}):(\d{2}))?/);
+  if (br) return new Date(+br[3], +br[2] - 1, +br[1], +(br[4] || 0), +(br[5] || 0));
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+function rmNoMes(v, mes) {
+  const d = rmData(v);
+  return !!d && d >= mes.inicio && d < mes.fim;
+}
+function rmMesSelecionado(valor) { // valor = 'AAAA-MM'
+  const p = String(valor || '').split('-');
+  const ano = +p[0], m = +p[1] - 1;
+  const inicio = new Date(ano, m, 1), fim = new Date(ano, m + 1, 1);
+  const ultimo = new Date(ano, m + 1, 0);
+  const iso = function (d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const br = function (d) { return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear(); };
+  return {
+    inicio: inicio, fim: fim, nome: RM_MESES[m], ano: ano,
+    rotulo: RM_MESES[m] + ' ' + ano, isoIni: iso(inicio), isoFim: iso(ultimo), brIni: br(inicio), brFim: br(ultimo)
+  };
+}
+function rmMesPassado() {
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function rmMediana(lista) {
+  const v = lista.filter(function (x) { return x !== null && !isNaN(x); }).sort(function (a, b) { return a - b; });
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+function rmContar(lista, fn) {
+  const c = {};
+  lista.forEach(function (x) { const k = fn(x); if (k) c[k] = (c[k] || 0) + 1; });
+  return c;
+}
+function rmOrdenar(obj) {
+  return Object.keys(obj).map(function (k) { return [k, obj[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
+}
+function rmSemAcento(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+
+// ---------- peças dos slides ----------
+function rmSlide(titulo, etiqueta, corpo) {
+  return '<section class="rm-slide">' +
+    '<div class="rm-marca"><i></i><i></i></div>' +
+    '<h2 class="rm-titulo">' + rmEsc(titulo) + '</h2>' +
+    (etiqueta ? '<span class="rm-etiqueta">' + rmEsc(etiqueta) + '</span>' : '') +
+    '<div class="rm-corpo">' + corpo + '</div>' +
+    '<div class="rm-rodape"></div><img class="rm-logo" src="' + RM.LOGO + '" alt="ICC">' +
+  '</section>';
+}
+function rmCapa(titulo, mes, sub, secao, icone) {
+  return '<section class="rm-slide rm-capa">' +
+    '<img class="rm-capa-logo" src="' + RM.LOGO + '" alt="ICC">' +
+    '<div class="rm-capa-txt"><span class="rm-capa-secao">' + rmEsc(secao) + '</span>' +
+    '<h1>' + rmEsc(titulo) + '</h1><h1 class="rm-capa-mes">' + rmEsc(mes.nome) + ' <small>' + mes.ano + '</small></h1>' +
+    '<p>' + rmEsc(sub) + '</p></div>' +
+    '<div class="rm-capa-hex"><span>' + (icone || '') + '</span></div>' +
+    '<div class="rm-rodape"></div>' +
+  '</section>';
+}
+function rmEncerramento() {
+  return '<section class="rm-slide rm-fim"><img src="' + RM.LOGO + '" alt="ICC"><div class="rm-rodape"></div></section>';
+}
+function rmFaixa(texto) { return '<div class="rm-faixa">' + rmEsc(texto) + '</div>'; }
+function rmKpi(numero, rotulo, cor) {
+  return '<div class="rm-tile"><div class="rm-kpi-num" style="color:' + (cor || RM.VERDE) + '">' + rmEsc(numero) + '</div>' +
+    '<div class="rm-kpi-rot">' + rmEsc(rotulo) + '</div></div>';
+}
+function rmRosca(partes, centro, tam) {
+  // partes = [[valor, cor], ...]
+  const total = partes.reduce(function (s, p) { return s + (Number(p[0]) || 0); }, 0) || 1;
+  let acc = 0;
+  const fatias = partes.map(function (p) {
+    const ini = acc / total * 360; acc += Number(p[0]) || 0;
+    return p[1] + ' ' + ini + 'deg ' + (acc / total * 360) + 'deg';
+  });
+  if (!partes.some(function (p) { return Number(p[0]) > 0; })) fatias.splice(0, fatias.length, RM.CINZA_C + ' 0deg 360deg');
+  tam = tam || 190;
+  return '<div class="rm-rosca" style="width:' + tam + 'px;height:' + tam + 'px;background:conic-gradient(' + fatias.join(',') + ')">' +
+    '<div class="rm-rosca-furo" style="font-size:' + Math.round(tam / 6.5) + 'px">' + rmEsc(centro) + '</div></div>';
+}
+function rmKpiRosca(partes, centro, rotulo) {
+  return '<div class="rm-tile">' + rmRosca(partes, centro, 180) + '<div class="rm-kpi-rot">' + rmEsc(rotulo) + '</div></div>';
+}
+// Barras horizontais: itens = [[rótulo, valor]], destaque = lista de rótulos em laranja.
+function rmBarras(titulo, itens, opt) {
+  opt = opt || {};
+  const max = Math.max.apply(null, itens.map(function (i) { return i[1]; }).concat([0])) || 1;
+  const fmt = opt.fmt || function (v) { return rmNum(v); };
+  let h = '<div class="rm-graf">' + (titulo ? '<div class="rm-graf-tit">' + rmEsc(titulo) + '</div>' : '');
+  if (!itens.length) h += '<p class="rm-vazio">' + rmEsc(opt.vazio || 'Nada registrado no mês.') + '</p>';
+  itens.forEach(function (i) {
+    const cor = (opt.destaque || []).indexOf(i[0]) > -1 ? RM.LARANJA : (opt.cor || RM.VERDE2);
+    h += '<div class="rm-barra"><span class="rm-barra-rot">' + rmEsc(i[0]) + '</span>' +
+      '<span class="rm-barra-trilho"><span style="width:' + Math.max(1.5, i[1] / max * 100) + '%;background:' + cor + '"></span></span>' +
+      '<span class="rm-barra-val">' + rmEsc(fmt(i[1])) + '</span></div>';
+  });
+  return h + '</div>';
+}
+// Barras empilhadas: itens = [[rótulo, [v1, v2]]], series = [[nome, cor, corTexto]]
+function rmEmpilhadas(itens, series) {
+  const max = Math.max.apply(null, itens.map(function (i) { return i[1].reduce(function (a, b) { return a + b; }, 0); }).concat([0])) || 1;
+  let h = '<div class="rm-graf"><div class="rm-legenda">' + series.map(function (s) {
+    return '<span><i style="background:' + s[1] + '"></i>' + rmEsc(s[0]) + '</span>';
+  }).join('') + '</div>';
+  itens.forEach(function (i) {
+    h += '<div class="rm-barra rm-barra--alta"><span class="rm-barra-rot">' + rmEsc(i[0]) + '</span><span class="rm-barra-trilho rm-barra-trilho--empilhada">';
+    i[1].forEach(function (v, k) {
+      if (v > 0) h += '<span style="width:' + (v / max * 100) + '%;background:' + series[k][1] + ';color:' + series[k][2] + '">' + v + '</span>';
+    });
+    h += '</span></div>';
+  });
+  return h + '</div>';
+}
+// Cartões com ícone: itens = [[ícone, título, descrição]]
+function rmCartoes(itens, tipo, colunas, compacto) {
+  if (!itens.length) return '<p class="rm-vazio">Nada para mostrar neste mês.</p>';
+  return '<div class="rm-cartoes rm-cartoes--' + (tipo || 'ok') + (compacto ? ' rm-cartoes--compacto' : '') + '" style="grid-template-columns:repeat(' + (colunas || 3) + ',1fr)">' +
+    itens.map(function (c) {
+      return '<div class="rm-cartao"><span class="rm-bola">' + c[0] + '</span><div><strong>' + rmEsc(c[1]) + '</strong><small>' + rmEsc(c[2]) + '</small></div></div>';
+    }).join('') + '</div>';
+}
+function rmDestaque(partes) { // [[número, texto], ...] em linha
+  return '<div class="rm-destaque">' + partes.map(function (p) {
+    return '<span><b>' + rmEsc(p[0]) + '</b> ' + rmEsc(p[1]) + '</span>';
+  }).join('<em>·</em>') + '</div>';
+}
+
+// ---------- tela: escolher mês, ver os slides e imprimir ----------
+// montar(mes) devolve uma Promise com a lista de slides (HTML).
+function rmTela(opcoes) {
+  appendHtml(app, screenHeader(opcoes.eyebrow || 'Relatório mensal', opcoes.titulo, opcoes.subtitulo));
+  if (opcoes.voltar) {
+    const voltar = el('<button class="btn btn--outline btn--sm" style="align-self:flex-start;margin-top:-6px">← Voltar</button>');
+    voltar.onclick = function () { go(opcoes.voltar); };
+    app.appendChild(voltar);
+  }
+  const topo = el(
+    '<div class="card stack rm-controles">' +
+      '<div class="field"><label>Mês da apresentação</label><input type="month" data-role="mes"></div>' +
+      '<div class="row" style="gap:8px;flex-wrap:wrap">' +
+        '<button class="btn btn--primary" data-role="gerar">Montar slides</button>' +
+        '<button class="btn btn--accent" data-role="imprimir" disabled>🖨️ Imprimir / salvar PDF</button>' +
+      '</div>' +
+      '<p class="subtle" style="margin:0;font-size:12.5px">Na janela de impressão, escolha "Salvar como PDF" e deixe as margens em "Nenhuma". Cada slide sai numa página.</p>' +
+    '</div>');
+  app.appendChild(topo);
+  const inpMes = topo.querySelector('[data-role="mes"]');
+  inpMes.value = S.rmMes || rmMesPassado();
+  inpMes.max = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+  const btnGerar = topo.querySelector('[data-role="gerar"]');
+  const btnImp = topo.querySelector('[data-role="imprimir"]');
+  const area = el('<div class="rm-previa"></div>');
+  app.appendChild(area);
+
+  function escalar() {
+    const w = area.clientWidth || 360;
+    const k = Math.min(1, w / RM.W);
+    area.querySelectorAll('.rm-moldura').forEach(function (m) {
+      m.style.height = (RM.H * k) + 'px';
+      m.firstElementChild.style.transform = 'scale(' + k + ')';
+    });
+  }
+  window.addEventListener('resize', escalar);
+
+  let geracao = 0;
+  async function gerar() {
+    const minha = ++geracao;
+    S.rmMes = inpMes.value;
+    const mes = rmMesSelecionado(inpMes.value);
+    btnGerar.disabled = true; btnImp.disabled = true;
+    area.innerHTML = '<p class="subtle">Buscando os dados de ' + rmEsc(mes.rotulo) + '…</p>';
+    let slides = null;
+    try { slides = await opcoes.montar(mes); } catch (e) { console.error(e); slides = null; }
+    if (minha !== geracao) return;
+    btnGerar.disabled = false;
+    if (!slides) { area.innerHTML = typeof blocoFalhaCarregar === 'function' ? blocoFalhaCarregar() : '<p class="subtle">Não foi possível carregar agora. Tente de novo.</p>'; return; }
+    area.innerHTML = '';
+    slides.forEach(function (html) {
+      const m = el('<div class="rm-moldura"></div>');
+      m.innerHTML = html;
+      area.appendChild(m);
+    });
+    escalar();
+    btnImp.disabled = false;
+    btnImp.onclick = function () { rmImprimir(slides, opcoes.nomeArquivo + ' ' + mes.rotulo); };
+  }
+  btnGerar.onclick = gerar;
+  inpMes.onchange = gerar;
+  gerar();
+}
+
+function rmImprimir(slides, nome) {
+  const antigo = document.getElementById('rm-impressao');
+  if (antigo) antigo.remove();
+  const raiz = document.createElement('div');
+  raiz.id = 'rm-impressao';
+  raiz.innerHTML = slides.join('');
+  document.body.appendChild(raiz);
+  document.body.classList.add('rm-imprimindo');
+  const tituloAntigo = document.title;
+  document.title = nome; // vira o nome sugerido do PDF
+  const limpar = function () {
+    document.body.classList.remove('rm-imprimindo');
+    document.title = tituloAntigo;
+    raiz.remove();
+    window.removeEventListener('afterprint', limpar);
+  };
+  window.addEventListener('afterprint', limpar);
+  // Espera as imagens (logo) carregarem antes de abrir a impressão.
+  const imgs = Array.prototype.slice.call(raiz.querySelectorAll('img'));
+  Promise.all(imgs.map(function (i) { return i.complete ? 0 : new Promise(function (r) { i.onload = i.onerror = r; }); }))
+    .then(function () { setTimeout(function () { window.print(); }, 50); });
+}
+
+// ------------------------- RELATÓRIO MENSAL — FROTA -------------------------
+function rmCategoriaItem(texto) {
+  const s = rmSemAcento(texto);
+  const regras = [
+    ['pneu', 'Pneus / rodas'], ['roda', 'Pneus / rodas'], ['luz', 'Luzes e sinalização'], ['farol', 'Luzes e sinalização'],
+    ['vazam', 'Vazamentos'], ['mangueira', 'Vazamentos'], ['hidraul', 'Vazamentos'], ['buzina', 'Buzina / alarme de ré'], ['alarme', 'Buzina / alarme de ré'],
+    ['freio', 'Freios'], ['pintura', 'Pintura e limpeza'], ['limpeza', 'Pintura e limpeza'], ['torre', 'Torre / garfo'], ['garfo', 'Torre / garfo'],
+    ['cinto', 'Cinto e itens de segurança'], ['oleo', 'Nível de óleo / bateria'], ['bateria', 'Elétrica / bateria'], ['eletric', 'Elétrica / bateria'],
+    ['motor', 'Motor'], ['transmiss', 'Motor']
+  ];
+  for (let i = 0; i < regras.length; i++) if (s.indexOf(regras[i][0]) > -1) return regras[i][1];
+  return 'Outros';
+}
+const RM_ICONE_FROTA = {
+  'Pneus / rodas': '🛞', 'Luzes e sinalização': '💡', 'Vazamentos': '💧', 'Buzina / alarme de ré': '🔊', 'Freios': '🛑',
+  'Pintura e limpeza': '🎨', 'Torre / garfo': '🏗️', 'Cinto e itens de segurança': '🦺', 'Nível de óleo / bateria': '🛢️',
+  'Elétrica / bateria': '🔋', 'Motor': '⚙️', 'Outros': '🔧'
+};
+const RM_SEGURANCA_FROTA = ['Luzes e sinalização', 'Buzina / alarme de ré', 'Freios', 'Pneus / rodas', 'Cinto e itens de segurança'];
+function rmNomeMaquina(n) {
+  const s = String(n || '');
+  return s === s.toUpperCase() ? s.toLowerCase().replace(/(^|\s)\S/g, function (c) { return c.toUpperCase(); }) : s;
+}
+function rmListaMaquinas(nomes) {
+  const u = [];
+  nomes.forEach(function (n) { n = rmNomeMaquina(n); if (u.indexOf(n) === -1) u.push(n); });
+  const curtos = u.map(function (n) { return n.replace(/^Frota /, ''); });
+  if (u.every(function (n) { return /^Frota /.test(n); })) return (u.length > 1 ? 'Frotas ' : 'Frota ') + curtos.join(', ').replace(/, ([^,]*)$/, ' e $1');
+  return u.join(', ').replace(/, ([^,]*)$/, ' e $1');
+}
+
+async function renderRelatorioMensal() {
+  rmTela({
+    titulo: 'Apresentação de segurança',
+    subtitulo: 'Slides do mês para a reunião de gestores · ' + unidadeSetorLabel(),
+    voltar: 'mais',
+    nomeArquivo: 'Segurança Frota ' + S.unidade.UNIDADE,
+    montar: rmMontarFrota
+  });
+}
+
+async function rmMontarFrota(mes) {
+  const filtro = { unidade: S.unidade.UNIDADE, periodo: 'custom', dataInicio: mes.isoIni, dataFim: mes.isoFim };
+  const r = await Promise.all([
+    api('getChecklists', filtro),
+    api('getNaoConformidades', filtro),
+    api('getManutencoes', filtro),
+    api('getRelatorio', filtro).catch(function () { return null; })
+  ]);
+  const checklists = r[0] || [], ncsMes = (r[1] || []).filter(function (n) { return rmNoMes(n.ABERTA_EM, mes); });
+  const manut = r[2] || [], rel = r[3];
+  const corretivas = manut.filter(function (m) { return String(m.TIPO) === 'corretiva' && rmNoMes(m.ABERTA_EM, mes); });
+
+  // ---- checklist ----
+  const itens = [];
+  checklists.forEach(function (c) { (c.ITENS || []).forEach(function (it) { itens.push({ it: it, maq: c.NOME_EQUIPAMENTO }); }); });
+  const nok = itens.filter(function (x) { return String(x.it.RESPOSTA).toLowerCase() === 'nok'; });
+  const porCat = rmOrdenar(rmContar(nok, function (x) { return rmCategoriaItem(x.it.ITEM); }));
+  const porMaq = rmOrdenar(rmContar(nok, function (x) { return rmNomeMaquina(x.maq); }));
+  const maquinas = rmContar(checklists, function (c) { return c.ID_EQUIPAMENTO; });
+
+  // ---- não conformidades ----
+  const ncFechadas = ncsMes.filter(function (n) { return String(n.STATUS) === 'fechada'; });
+  const ncAbertas = ncsMes.filter(function (n) { return String(n.STATUS) !== 'fechada'; });
+  const diasResolver = rmMediana(ncFechadas.map(function (n) {
+    const a = rmData(n.ABERTA_EM), f = rmData(n.FECHADA_EM);
+    return a && f ? (f - a) / 86400000 : null;
+  }));
+  const pctResolvidas = ncsMes.length ? Math.round(ncFechadas.length / ncsMes.length * 100) : 0;
+
+  // ---- corretivas ----
+  const concluidas = corretivas.filter(function (m) { return String(m.STATUS) === 'concluida'; });
+  const alta = corretivas.filter(function (m) { return String(m.PRIORIDADE) === 'alta'; }).length;
+  const causas = rmOrdenar(rmContar(corretivas, function (m) { return temValorCampo(m.CAUSA_RAIZ) ? String(m.CAUSA_RAIZ) : 'Em andamento'; }));
+  const mauUso = corretivas.filter(function (m) { return /mau uso/i.test(String(m.CAUSA_RAIZ || '')); }).length;
+
+  // ---- tempo parado (expediente, mesmo cálculo da tela Resumo) ----
+  const horas = rel && rel.horasPorMaquina ? rel.horasPorMaquina : [];
+  const paradas = horas.map(function (h) { return [rmNomeMaquina(h.nomeEquipamento), (Number(h.indisponibilidadeMs) || 0) / 3600000]; })
+    .filter(function (x) { return x[1] >= 0.5; }).sort(function (a, b) { return b[1] - a[1]; });
+  const totalParado = paradas.reduce(function (s, x) { return s + x[1]; }, 0);
+  const disp = rel && rel.impacto && rel.impacto.disponibilidadePct !== undefined && rel.impacto.disponibilidadePct !== null ? Number(rel.impacto.disponibilidadePct) : null;
+  const expediente = rel && rel.impacto && rel.impacto.expediente ? rel.impacto.expediente : 'horas de expediente';
+
+  const sub = S.unidade.UNIDADE + (S.setor ? ' · ' + setorLabel(S.setor) : '');
+  const slides = [rmCapa('SEGURANÇA', mes, sub, 'Gestão de Frota', '🚜')];
+
+  // 1. Resumo
+  slides.push(rmSlide('Frota em ' + mes.nome.toLowerCase(), 'FROTA',
+    '<div class="rm-linha">' +
+      rmKpi(checklists.length, 'checklists de segurança antes de operar' + (Object.keys(maquinas).length ? ' (' + Object.keys(maquinas).length + ' máquinas)' : '')) +
+      rmKpiRosca([[ncFechadas.length, RM.VERDE], [ncAbertas.length, RM.CINZA_C]], ncFechadas.length + '/' + ncsMes.length, 'não conformidades resolvidas') +
+      rmKpiRosca([[concluidas.length, RM.VERDE], [corretivas.length - concluidas.length, RM.CINZA_C]], concluidas.length + '/' + corretivas.length, 'manutenções corretivas concluídas') +
+      rmKpi(diasResolver === null ? '—' : rmNum(diasResolver, diasResolver < 10 ? 1 : 0) + ' dias', 'tempo típico para resolver uma não conformidade', RM.LARANJA) +
+    '</div>' +
+    rmFaixa(ncsMes.length ? '✓  ' + pctResolvidas + '% dos problemas apontados no checklist já foram resolvidos' : 'Nenhuma não conformidade aberta no mês')));
+
+  // 2. Checklist
+  const topoMaq = porMaq[0];
+  slides.push(rmSlide('Frota: o que o checklist reprovou', 'FROTA',
+    '<div class="rm-linha">' +
+      rmBarras(nok.length + ' itens reprovados, por tipo', porCat.slice(0, 8), { destaque: RM_SEGURANCA_FROTA }) +
+      rmBarras('Por máquina', porMaq.slice(0, 7), { destaque: topoMaq ? [topoMaq[0]] : [] }) +
+    '</div>' +
+    rmFaixa(topoMaq ? topoMaq[0] + ' teve ' + topoMaq[1] + ' das ' + nok.length + ' reprovações · em laranja: itens que afetam quem está perto da máquina' : 'Nenhum item reprovado no mês')));
+
+  // 3. Corretivas
+  slides.push(rmSlide('Frota: manutenções corretivas', 'FROTA',
+    '<div class="rm-linha">' +
+      '<div style="flex:1.8">' + rmBarras('Causa de cada corretiva (' + corretivas.length + ' no mês)', causas, { destaque: ['Mau uso / operação'] }) + '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:18px">' +
+        rmKpi(alta, 'de prioridade alta', RM.LARANJA) +
+        rmKpi(rmNum(totalParado) + ' h', 'de máquina parada no mês', RM.VERM) +
+      '</div>' +
+    '</div>' +
+    rmFaixa(mauUso ? mauUso + ' de ' + corretivas.length + ' corretivas por mau uso → tema para reciclagem dos operadores' : corretivas.length + ' corretivas no mês · nenhuma por mau uso')));
+
+  // 4. Tempo parado
+  const topoParado = paradas[0];
+  slides.push(rmSlide('Frota: tempo de máquina parada', 'FROTA',
+    '<div class="rm-linha">' +
+      '<div style="flex:1.8">' + rmBarras('Horas paradas no mês, por máquina', paradas.slice(0, 7), {
+        destaque: topoParado ? [topoParado[0]] : [], fmt: function (v) { return rmNum(v) + ' h'; }, vazio: 'Nenhuma máquina parada no mês.' }) + '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:18px">' +
+        rmKpi(rmNum(totalParado) + ' h', 'paradas no total', RM.VERM) +
+        '<div class="rm-tile" style="flex-direction:row;gap:18px">' + rmRosca([[disp || 0, RM.VERDE], [100 - (disp || 0), RM.VERM]], disp === null ? '—' : rmNum(disp) + '%', 130) +
+          '<div class="rm-kpi-rot" style="text-align:left"><b style="color:#1F2937">da frota disponível</b><br>no mês</div></div>' +
+      '</div>' +
+    '</div>' +
+    rmFaixa(topoParado && totalParado ? topoParado[0] + ' respondeu por ' + Math.round(topoParado[1] / totalParado * 100) + '% do tempo parado' : 'Frota sem tempo parado no mês') +
+    '<p class="rm-nota" style="margin:-8px 0 0">Horas de expediente do setor (' + rmEsc(expediente) + '), pelo histórico de status do app.</p>'));
+
+  // 5. Realizado
+  const feitos = {};
+  ncFechadas.forEach(function (n) {
+    const c = rmCategoriaItem(n.ITEM + ' ' + n.DESCRICAO);
+    (feitos[c] = feitos[c] || []).push(n.NOME_EQUIPAMENTO);
+  });
+  concluidas.forEach(function (m) {
+    const c = rmCategoriaItem(m.TITULO + ' ' + (m.SUBCATEGORIA || '') + ' ' + (m.CATEGORIA || ''));
+    (feitos[c] = feitos[c] || []).push(m.NOME_EQUIPAMENTO);
+  });
+  const cartoesFeitos = Object.keys(feitos).filter(function (c) { return c !== 'Pintura e limpeza' || Object.keys(feitos).length < 6; })
+    .sort(function (a, b) { return (RM_SEGURANCA_FROTA.indexOf(a) === -1) - (RM_SEGURANCA_FROTA.indexOf(b) === -1) || feitos[b].length - feitos[a].length; })
+    .slice(0, 6).map(function (c) { return [RM_ICONE_FROTA[c] || '🔧', c, rmListaMaquinas(feitos[c])]; });
+  slides.push(rmSlide('Frota: o que foi realizado', 'FROTA',
+    rmDestaque([[ncFechadas.length, 'não conformidades resolvidas'], [concluidas.length, 'corretivas concluídas']]) +
+    rmCartoes(cartoesFeitos, 'ok', 3)));
+
+  // 6. Em aberto
+  const abertos = [];
+  manut.filter(function (m) { return String(m.STATUS) !== 'concluida' && rmData(m.ABERTA_EM) && rmData(m.ABERTA_EM) < mes.fim; }).forEach(function (m) {
+    const d = rmData(m.INICIADA_EM) || rmData(m.ABERTA_EM);
+    abertos.push(['🚫', rmNomeMaquina(m.NOME_EQUIPAMENTO) + ' em manutenção', String(m.TITULO || '').toLowerCase().slice(0, 60) + ' · desde ' + fmtData(d)]);
+  });
+  ncAbertas.forEach(function (n) {
+    const c = rmCategoriaItem(n.ITEM);
+    abertos.push([RM_ICONE_FROTA[c] || '🔧', rmNomeMaquina(n.NOME_EQUIPAMENTO), String(n.DESCRICAO || c).replace(/\s+/g, ' ').slice(0, 60) + ' · desde ' + fmtData(n.ABERTA_EM)]);
+  });
+  slides.push(rmSlide('Frota: ainda em aberto', 'FROTA',
+    (abertos.length ? rmCartoes(abertos.slice(0, 9), 'aberto', 3) : '<p class="rm-vazio">✓ Tudo o que abriu no mês já foi resolvido.</p>') +
+    (abertos.length > 9 ? '<p class="rm-nota">+ ' + (abertos.length - 9) + ' outros itens em aberto.</p>' : '')));
+
+  slides.push(rmEncerramento());
+  return slides;
+}
