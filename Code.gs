@@ -59,14 +59,14 @@ const HEADERS = {
   CONFIG_USUARIOS: ['ID_USUARIO', 'NOME', 'USUARIO', 'UNIDADE', 'TIPO', 'SENHA', 'ATIVO', 'SETOR'],
   CONFIG_RESPONSAVEIS: ['ID_RESPONSAVEL', 'UNIDADE', 'NOME', 'ATIVO'],
   EQUIPAMENTOS: ['ID_EQUIPAMENTO', 'UNIDADE', 'NOME', 'CODIGO', 'TIPO', 'STATUS', 'STATUS_DESDE', 'OBSERVACOES', 'CRIADO_EM', 'SETOR', 'MOTORIZACAO'],
-  CHECKLISTS: ['ID_CHECKLIST', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'DATA_HORA', 'STATUS', 'FOTO_EQUIPAMENTO', 'HORIMETRO_INICIAL', 'HORIMETRO_FINAL', 'FECHADO_EM'],
+  CHECKLISTS: ['ID_CHECKLIST', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'DATA_HORA', 'STATUS', 'FOTO_EQUIPAMENTO', 'HORIMETRO_INICIAL', 'HORIMETRO_FINAL', 'FECHADO_EM', 'HORAS_RODADAS', 'DATA'],
   CHECKLIST_ITENS: ['ID_ITEM_RESPOSTA', 'ID_CHECKLIST', 'ITEM', 'INSTRUCAO', 'RESPOSTA', 'DESCRICAO_PROBLEMA', 'FOTO_PROBLEMA'],
   NAO_CONFORMIDADES: ['ID_NC', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'ITEM', 'DESCRICAO', 'FOTO', 'STATUS', 'ABERTA_EM', 'FECHADA_EM', 'ID_CHECKLIST_ORIGEM'],
-  MANUTENCOES: ['ID_MANUTENCAO', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'TIPO', 'PRIORIDADE', 'TITULO', 'DESCRICAO', 'STATUS', 'DATA_PREVISTA', 'ABERTA_EM', 'INICIADA_EM', 'CONCLUIDA_EM', 'ACIONADO_EM', 'HORIMETRO', 'FOTOS', 'PRESTADOR', 'CAUSA_RAIZ', 'SOLUCAO', 'CATEGORIA', 'SUBCATEGORIA', 'ABERTO_POR'],
+  MANUTENCOES: ['ID_MANUTENCAO', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'TIPO', 'PRIORIDADE', 'TITULO', 'DESCRICAO', 'STATUS', 'DATA_PREVISTA', 'ABERTA_EM', 'INICIADA_EM', 'CONCLUIDA_EM', 'ACIONADO_EM', 'HORIMETRO', 'FOTOS', 'PRESTADOR', 'CAUSA_RAIZ', 'SOLUCAO', 'CATEGORIA', 'SUBCATEGORIA', 'ABERTO_POR', 'HORAS_PARADA', 'DATA_ABERTURA', 'DATA_CONCLUSAO'],
   CONFIG_FORNECEDORES_GAS: ['ID_FORNECEDOR_GAS', 'UNIDADE', 'FORNECEDOR', 'VALOR', 'ATIVO'],
   LAVAGENS: ['ID_LAVAGEM', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'DATA_HORA', 'STATUS', 'FOTO_EQUIPAMENTO'],
   LAVAGEM_ITENS: ['ID_ITEM_RESPOSTA', 'ID_LAVAGEM', 'ITEM', 'INSTRUCAO', 'RESPOSTA', 'OBSERVACAO'],
-  TROCAS_GAS: ['ID_TROCA_GAS', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'FORNECEDOR', 'HORIMETRO', 'HORIMETRO_ANTERIOR', 'HORAS_OPERACAO', 'CUSTO', 'DATA_HORA', 'QUANTIDADE_KG'],
+  TROCAS_GAS: ['ID_TROCA_GAS', 'UNIDADE', 'ID_EQUIPAMENTO', 'NOME_EQUIPAMENTO', 'RESPONSAVEL', 'FORNECEDOR', 'HORIMETRO', 'HORIMETRO_ANTERIOR', 'HORAS_OPERACAO', 'CUSTO', 'DATA_HORA', 'QUANTIDADE_KG', 'DATA'],
   CONFIG_EMAILS_MANUTENCAO: ['ID_EMAIL', 'UNIDADE', 'EMAIL', 'ATIVO', 'SETOR'],
   // [NOVO 17/09] Histórico de mudanças de status do equipamento — usado
   // para calcular horas em manutenção/parado/em uso DENTRO de um período
@@ -312,7 +312,8 @@ const ACOES_ADMIN = [
   'getNaoConformidades', 'updateStatusNaoConformidade',
   'getRelatorio', 'gerarRelatorioPDF', 'getRelatorioGas',
   'getRelatorioExecutivo', 'gerarRelatorioExecutivoPDF', 'getVisaoGeralUnidades', 'gerarManutencaoPDF', 'gerarChecklistsPDF', 'getPrestadores', 'gerarPrestadoresPDF',
-  'getComparativoUnidades', 'savePergunta', 'deletePergunta', 'deleteCarregamento'
+  'getComparativoUnidades', 'savePergunta', 'deletePergunta', 'deleteCarregamento',
+  'getUsuariosGestao', 'createUsuario', 'updateSenhaUsuario', 'deleteUsuario', 'gerarHorasRodadasPDF'
 ];
 const SESSAO_TTL_SEGUNDOS = 21600;
 
@@ -366,6 +367,7 @@ function sessaoDoUsuario_(usuario) {
     USUARIO: usuario.USUARIO,
     TIPO: String(usuario.TIPO || 'OPERADOR').toUpperCase(),
     UNIDADE: usuario.UNIDADE,
+    PERMISSAO_GAS: permissaoGas_(usuario),
     SETOR: setorDoUsuario_(usuario) // '' = os dois setores
   };
 }
@@ -460,6 +462,7 @@ function routeAction_(action, params, token) {
   // todas as consultas — ver "HELPERS DE SETOR".
   SETOR_PEDIDO_ = normalizarSetor_(params && params.setor);
   MAPA_SETOR_EQUIP_ = null;
+  MAPA_GRUPO_EQUIP_ = null;
   MEMO_ABAS_ = {};
   garantirEstrutura_();
   params = params || {};
@@ -473,12 +476,13 @@ function routeAction_(action, params, token) {
     'getLavagemItensModelo', 'getLavagens', 'getFornecedoresGas',
     'getTrocasGas', 'getRelatorioGas', 'getRelatorioExecutivo',
     'getVisaoGeralUnidades', 'getComparativoUnidades', 'getPerguntas', 'getPendenciasEquipamento', 'getCarregamentos',
+    'getUsuariosGestao',
     // Geração de PDF só lê dados e monta o arquivo — não grava linha nova
     // na planilha, então não precisa da trava. Antes disso, gerar um PDF
     // (que pode levar dezenas de segundos por causa dos gráficos/Slides)
     // travava TODO mundo (qualquer unidade) que tentasse abrir checklist,
     // manutenção, lavagem ou troca de gás ao mesmo tempo.
-    'gerarRelatorioPDF', 'gerarRelatorioExecutivoPDF', 'gerarManutencaoPDF', 'gerarChecklistsPDF', 'getPrestadores', 'gerarPrestadoresPDF'
+    'gerarRelatorioPDF', 'gerarRelatorioExecutivoPDF', 'gerarManutencaoPDF', 'gerarChecklistsPDF', 'getPrestadores', 'gerarPrestadoresPDF', 'gerarHorasRodadasPDF'
   ];
   // [PERF 14/09] Ações que já gerenciam a própria trava internamente
   // (ver comentário acima) — o roteador não deve pegar a trava para elas.
@@ -498,6 +502,11 @@ function routeAction_(action, params, token) {
       case 'getUnidades': return { ok: true, data: getUnidades_() };
       case 'getUsuarios': return { ok: true, data: getUsuarios_(params.unidade, SETOR_PEDIDO_) };
       case 'loginAdmin': return loginAdmin_(params);
+      // ---- [20/10] gestão de usuários pelo admin ----
+      case 'getUsuariosGestao': return { ok: true, data: getUsuariosGestao_(params) };
+      case 'createUsuario': return criarUsuario_(params);
+      case 'updateSenhaUsuario': return atualizarSenhaUsuario_(params);
+      case 'deleteUsuario': return removerUsuario_(params);
       case 'loginOperador': return loginOperador_(params);
 
       // ---- responsáveis do checklist ----
@@ -567,6 +576,7 @@ function routeAction_(action, params, token) {
       case 'gerarRelatorioExecutivoPDF': return { ok: true, data: gerarRelatorioExecutivoPDF_(params) };
       case 'gerarManutencaoPDF': return { ok: true, data: gerarManutencaoPDF_(params) };
       case 'gerarChecklistsPDF': return { ok: true, data: gerarChecklistsPDF_(params) };
+      case 'gerarHorasRodadasPDF': return { ok: true, data: gerarHorasRodadasPDF_(params) };
       case 'getPrestadores': return { ok: true, data: getPrestadores_(params) };
       case 'gerarPrestadoresPDF': return { ok: true, data: gerarPrestadoresPDF_(params) };
       case 'getHistorico': return { ok: true, data: getHistorico_(params) };
@@ -1043,12 +1053,82 @@ function configurarSetores() {
 
 // [ESTABILIDADE OUT/2026] Uma consulta de cache só por pedido confere as
 // duas migrações (SETOR e ACIONADO_EM).
+// [22/10] Refaz HORAS_OPERACAO das trocas de gás e dos carregamentos já
+// gravados: HORIMETRO − HORIMETRO_ANTERIOR ([09/11] sem ÷ 10: horímetro em horas). Recalcula a partir dos
+// horímetros (não divide o valor antigo), então rodar de novo não estraga
+// nada. Roda sozinha uma vez no primeiro pedido depois da atualização.
+function corrigirHorasHorimetroDecimal() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const res = [];
+  [SHEETS.TROCAS_GAS, typeof ABA_CARREGAMENTOS !== 'undefined' ? ABA_CARREGAMENTOS : null].forEach(function (nome) {
+    if (!nome) return;
+    const sh = ss.getSheetByName(nome);
+    if (!sh || sh.getLastRow() < 2) return;
+    const v = sh.getDataRange().getValues();
+    const cab = v[0].map(function (h) { return String(h || '').trim(); });
+    const cH = cab.indexOf('HORIMETRO'), cA = cab.indexOf('HORIMETRO_ANTERIOR'), cO = cab.indexOf('HORAS_OPERACAO');
+    if (cH < 0 || cA < 0 || cO < 0) return;
+    const col = [];
+    let mudou = 0;
+    for (let i = 1; i < v.length; i++) {
+      const h = v[i][cH], a = v[i][cA];
+      let novo = v[i][cO];
+      if (h !== '' && a !== '' && h !== null && a !== null && !isNaN(Number(h)) && !isNaN(Number(a))) {
+        novo = Math.max(0, horasEntreHorimetros_(Number(h) - Number(a)));
+        if (Number(v[i][cO]) !== novo) mudou++;
+      }
+      col.push([novo]);
+    }
+    sh.getRange(2, cO + 1, col.length, 1).setValues(col);
+    res.push(nome + ': ' + mudou + ' linha(s) corrigida(s)');
+  });
+  PropertiesService.getScriptProperties().setProperty('horimetro_decimal_v1_ok', 'SIM');
+  MEMO_ABAS_ = {};
+  return res.join(' · ') || 'Nada para corrigir.';
+}
+
 function garantirEstrutura_() {
   let cache = null;
   try {
     cache = CacheService.getScriptCache();
-    if (cache.get('estrutura_ok_v8')) return;
+    if (cache.get('estrutura_ok_v12')) return;
   } catch (e) { /* sem cache: confere do jeito longo */ }
+  try {
+    if (PropertiesService.getScriptProperties().getProperty('horas_parada_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      esperarTrava_(lock);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('horas_parada_v1_ok') !== 'SIM') configurarHorasParada();
+      } finally { lock.releaseLock(); }
+    }
+  } catch (e) { console.error('configurarHorasParada: ' + e); }
+  try {
+    if (PropertiesService.getScriptProperties().getProperty('horas_rodadas_chk_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      esperarTrava_(lock);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('horas_rodadas_chk_v1_ok') !== 'SIM') configurarHorasRodadasChecklist();
+      } finally { lock.releaseLock(); }
+    }
+  } catch (e) { console.error('configurarHorasRodadasChecklist: ' + e); }
+  try {
+    if (PropertiesService.getScriptProperties().getProperty('colunas_data_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      esperarTrava_(lock);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('colunas_data_v1_ok') !== 'SIM') configurarColunasData();
+      } finally { lock.releaseLock(); }
+    }
+  } catch (e) { console.error('configurarColunasData: ' + e); }
+  try {
+    if (PropertiesService.getScriptProperties().getProperty('horimetro_decimal_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      esperarTrava_(lock);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('horimetro_decimal_v1_ok') !== 'SIM') corrigirHorasHorimetroDecimal();
+      } finally { lock.releaseLock(); }
+    }
+  } catch (e) { console.error('corrigirHorasHorimetroDecimal: ' + e); }
   garantirColunasSetor_();
   garantirColunaAcionado_();
   garantirColunasHorimetro_();
@@ -1058,8 +1138,10 @@ function garantirEstrutura_() {
   try {
     const props = PropertiesService.getScriptProperties();
     if (props.getProperty('setor_v1_ok') === 'SIM' && props.getProperty('fluxo_v1_ok') === 'SIM' &&
-        props.getProperty('usuarios_setor_v1_ok') === 'SIM' && props.getProperty('horimetro_v5_ok') === 'SIM' && cache) {
-      cache.put('estrutura_ok_v8', '1', 21600);
+        props.getProperty('usuarios_setor_v1_ok') === 'SIM' && props.getProperty('horimetro_v5_ok') === 'SIM' &&
+        props.getProperty('horimetro_decimal_v1_ok') === 'SIM' && props.getProperty('horas_parada_v1_ok') === 'SIM' &&
+        props.getProperty('horas_rodadas_chk_v1_ok') === 'SIM' && props.getProperty('colunas_data_v1_ok') === 'SIM' && cache) {
+      cache.put('estrutura_ok_v12', '1', 21600);
     }
   } catch (e) { /* tenta de novo no próximo pedido */ }
 }
@@ -1311,6 +1393,151 @@ function loginOperador_(params) {
   }
   exigirSetorDoUsuario_(usuario);
   return { ok: true, data: criarSessao_(usuario) };
+}
+
+// ======================= [20/10] GESTÃO DE USUÁRIOS (ADMIN) =======================
+// Regra: o admin só mexe nos usuários da PRÓPRIA unidade — o admin de
+// Jundiaí cria e remove só logins de Jundiaí. Quem tem UNIDADE = TODAS
+// (gerente/coordenador) mexe em qualquer unidade e só ele cria outro
+// usuário TODAS. Admin preso a um setor só cria usuários do setor dele.
+// Ninguém remove a si mesmo. Remover = ATIVO NAO (o histórico continua).
+function adminDaSessao_(p) {
+  const admin = getUsuariosCache_().find(function (u) { return String(u.ID_USUARIO) === String(p.idUsuario); });
+  if (!admin || String(admin.TIPO).toUpperCase() !== 'ADMIN' || String(admin.ATIVO).toUpperCase() !== 'SIM') {
+    throw new Error('Só o administrador gerencia usuários.');
+  }
+  return admin;
+}
+
+function podeGerirUnidade_(admin, unidade) {
+  if (ehTodasUnidades_(admin.UNIDADE)) return true;
+  return !ehTodasUnidades_(unidade) && String(unidade).trim() === String(admin.UNIDADE).trim();
+}
+
+function podeGerirUsuario_(admin, alvo) {
+  if (!podeGerirUnidade_(admin, alvo.UNIDADE)) return false;
+  const setorAdmin = setorDoUsuario_(admin);
+  return !setorAdmin || setorDoUsuario_(alvo) === setorAdmin;
+}
+
+function limparCacheUsuarios_() {
+  try {
+    const chaves = ['usuarios_completo'];
+    const unidades = getUnidades_().map(function (u) { return String(u.UNIDADE).trim(); }).concat(['', 'TODAS']);
+    unidades.forEach(function (u) {
+      ['', 'FABRICA', 'OPERACAO'].forEach(function (s) { chaves.push('usuarios_' + u + '_' + s); });
+    });
+    CacheService.getScriptCache().removeAll(chaves);
+  } catch (e) { /* expira sozinho em 2 min */ }
+}
+
+function usuarioParaGestao_(u, admin) {
+  return {
+    ID_USUARIO: u.ID_USUARIO, NOME: u.NOME, USUARIO: u.USUARIO,
+    TIPO: String(u.TIPO || 'OPERADOR').toUpperCase(), UNIDADE: u.UNIDADE,
+    SETOR: setorDoUsuario_(u),
+    EU: String(u.ID_USUARIO) === String(admin.ID_USUARIO),
+    PODE_GERIR: podeGerirUsuario_(admin, u) && String(u.ID_USUARIO) !== String(admin.ID_USUARIO)
+  };
+}
+
+// Lista os usuários ativos da unidade (admin TODAS vê também os TODAS).
+function getUsuariosGestao_(p) {
+  const admin = adminDaSessao_(p);
+  const unidade = textoLimpo_(p.unidade);
+  return readSheet_(SHEETS.USUARIOS)
+    .filter(function (u) {
+      if (String(u.ATIVO).toUpperCase() !== 'SIM') return false;
+      if (ehTodasUnidades_(u.UNIDADE)) return ehTodasUnidades_(admin.UNIDADE);
+      return String(u.UNIDADE).trim() === unidade;
+    })
+    .map(function (u) { return usuarioParaGestao_(u, admin); })
+    .sort(function (a, b) {
+      if (a.TIPO !== b.TIPO) return a.TIPO === 'ADMIN' ? -1 : 1;
+      return String(a.NOME).localeCompare(String(b.NOME));
+    });
+}
+
+function validarSenhaAdmin_(senha) {
+  const s = String(senha === undefined || senha === null ? '' : senha).trim();
+  if (s.length < 4) throw new Error('A senha do administrador precisa ter pelo menos 4 caracteres.');
+  return s;
+}
+
+function criarUsuario_(p) {
+  const admin = adminDaSessao_(p);
+  const unidade = textoLimpo_(p.unidadeUsuario || p.unidade);
+  if (!unidade) throw new Error('Informe a unidade do usuário.');
+  if (!podeGerirUnidade_(admin, unidade)) {
+    throw new Error('Você só pode criar usuários da unidade ' + admin.UNIDADE + '.');
+  }
+  if (!ehTodasUnidades_(unidade) && !getUnidades_().some(function (u) { return String(u.UNIDADE).trim() === unidade; })) {
+    throw new Error('Unidade não encontrada: ' + unidade);
+  }
+  const nome = textoLimpo_(p.nome);
+  if (!nome) throw new Error('Informe o nome.');
+  const login = textoLimpo_(p.usuario).toLowerCase().replace(/\s+/g, '.');
+  if (!login) throw new Error('Informe o usuário (login).');
+  const tipo = textoLimpo_(p.tipo).toUpperCase();
+  if (['ADMIN', 'OPERADOR'].indexOf(tipo) === -1) throw new Error('Tipo inválido: use Administrador ou Operador.');
+  const senha = tipo === 'ADMIN' ? validarSenhaAdmin_(p.senha) : '';
+
+  // Setor: admin preso a um setor só cria do setor dele.
+  const setorAdmin = setorDoUsuario_(admin);
+  let setor = setorEhTodos_(p.setorUsuario) || !textoLimpo_(p.setorUsuario) ? 'TODOS' : normalizarSetor_(p.setorUsuario);
+  if (!setor) throw new Error('Setor inválido.');
+  if (setorAdmin) setor = setorAdmin;
+
+  const ativos = readSheet_(SHEETS.USUARIOS).filter(function (u) { return String(u.ATIVO).toUpperCase() === 'SIM'; });
+  if (ativos.some(function (u) { return String(u.USUARIO || '').trim().toLowerCase() === login; })) {
+    throw new Error('Já existe um usuário ativo com o login "' + login + '".');
+  }
+  if (ativos.some(function (u) {
+    return String(u.UNIDADE).trim() === unidade && String(u.NOME).trim().toLowerCase() === nome.toLowerCase();
+  })) {
+    throw new Error('Já existe um usuário ativo com o nome "' + nome + '" nesta unidade.');
+  }
+
+  const todosIds = readSheet_(SHEETS.USUARIOS).map(function (u) { return String(u.ID_USUARIO); });
+  let id = nextId_('USR');
+  while (todosIds.indexOf(id) > -1) id = nextId_('USR');
+  const registro = { ID_USUARIO: id, NOME: nome, USUARIO: login, UNIDADE: unidade, TIPO: tipo, SENHA: senha, ATIVO: 'SIM', SETOR: setor };
+  appendRow_(SHEETS.USUARIOS, registro);
+  limparCacheUsuarios_();
+  return { ok: true, data: usuarioParaGestao_(registro, admin) };
+}
+
+// Troca a senha de um administrador (ele é desconectado e entra com a nova).
+function atualizarSenhaUsuario_(p) {
+  const admin = adminDaSessao_(p);
+  const alvo = findRowById_(SHEETS.USUARIOS, 'ID_USUARIO', textoLimpo_(p.idAlvo));
+  if (!alvo || String(alvo.ATIVO).toUpperCase() !== 'SIM') throw new Error('Usuário não encontrado.');
+  const ehEu = String(alvo.ID_USUARIO) === String(admin.ID_USUARIO);
+  if (!ehEu && !podeGerirUsuario_(admin, alvo)) throw new Error('Você não pode alterar usuários de outra unidade.');
+  if (String(alvo.TIPO).toUpperCase() !== 'ADMIN') throw new Error('Operador entra sem senha.');
+  updateRowById_(SHEETS.USUARIOS, 'ID_USUARIO', alvo.ID_USUARIO, { SENHA: validarSenhaAdmin_(p.senha) });
+  limparCacheUsuarios_();
+  return { ok: true, data: { ID_USUARIO: alvo.ID_USUARIO, senhaAlterada: true } };
+}
+
+function removerUsuario_(p) {
+  const admin = adminDaSessao_(p);
+  const alvo = findRowById_(SHEETS.USUARIOS, 'ID_USUARIO', textoLimpo_(p.idAlvo));
+  if (!alvo || String(alvo.ATIVO).toUpperCase() !== 'SIM') throw new Error('Usuário não encontrado.');
+  if (String(alvo.ID_USUARIO) === String(admin.ID_USUARIO)) throw new Error('Você não pode remover o seu próprio login.');
+  if (!podeGerirUsuario_(admin, alvo)) throw new Error('Você só pode remover usuários da unidade ' + admin.UNIDADE + '.');
+  if (String(alvo.TIPO).toUpperCase() === 'ADMIN') {
+    const outrosAdmins = readSheet_(SHEETS.USUARIOS).filter(function (u) {
+      return String(u.ATIVO).toUpperCase() === 'SIM' && String(u.TIPO).toUpperCase() === 'ADMIN' &&
+        String(u.ID_USUARIO) !== String(alvo.ID_USUARIO) && String(u.UNIDADE).trim() === String(alvo.UNIDADE).trim();
+    });
+    if (!outrosAdmins.length && !ehTodasUnidades_(admin.UNIDADE)) {
+      throw new Error('Este é o último administrador da unidade — crie outro antes de remover.');
+    }
+  }
+  updateRowById_(SHEETS.USUARIOS, 'ID_USUARIO', alvo.ID_USUARIO, { ATIVO: 'NAO' });
+  limparCacheUsuarios_(); // a sessão dele cai na hora
+  return { ok: true, data: { ID_USUARIO: alvo.ID_USUARIO, removido: true } };
 }
 
 // Responsáveis são os nomes selecionáveis no campo "Responsável" do
@@ -1701,7 +1928,8 @@ function criarChecklist_(p) {
       FOTO_EQUIPAMENTO: fotoEquipamento,
       HORIMETRO_INICIAL: horimetroInicial,
       HORIMETRO_FINAL: '',
-      FECHADO_EM: ''
+      FECHADO_EM: '',
+      DATA: dataPlanilha_(agora)
     });
 
     // Mapa das NCs já abertas: chave equipamento + item (a regra de
@@ -1956,11 +2184,28 @@ function getNaoConformidades_(params) {
   });
 
   // [OUT/2026] A NC acompanha o chamado de manutenção aberto para ela.
+  // [19/10] Se a NC não tem chamado ligado (ou o ligado já foi finalizado)
+  // mas a MÁQUINA já tem manutenção em aberto, mostra essa manutenção —
+  // assim o app não oferece abrir uma segunda para a mesma máquina.
   const manutPorNc = manutencaoPorNc_();
+  const ativaPorEquip = {};
+  readSheet_(SHEETS.MANUTENCOES).forEach(function (m) {
+    if (!manutencaoAtiva_(m)) return;
+    const k = String(m.ID_EQUIPAMENTO);
+    if (!ativaPorEquip[k] || ordenarPorDataDesc_(m.ABERTA_EM, ativaPorEquip[k].ABERTA_EM) < 0) ativaPorEquip[k] = m;
+  });
   rows.forEach(function (nc) {
-    const m = manutPorNc[String(nc.ID_NC)];
+    let m = manutPorNc[String(nc.ID_NC)];
+    let ligada = !!m;
+    if (String(nc.STATUS) === 'aberta' && (!m || String(m.STATUS) === 'concluida')) {
+      const ativa = ativaPorEquip[String(nc.ID_EQUIPAMENTO)];
+      if (ativa) { m = ativa; ligada = false; }
+    }
     nc.ID_MANUTENCAO = m ? m.ID_MANUTENCAO : '';
     nc.STATUS_MANUTENCAO = m ? String(m.STATUS) : '';
+    nc.MANUTENCAO_LIGADA = ligada;
+    nc.TITULO_MANUTENCAO = m ? String(m.TITULO || '') : '';
+    nc.DESCRICAO_MANUTENCAO = m ? String(m.DESCRICAO || '') : '';
   });
 
   return rows.sort(function (a, b) { return ordenarPorDataDesc_(a.ABERTA_EM, b.ABERTA_EM); });
@@ -2320,8 +2565,12 @@ function notificarManutencao_(m) {
   try {
     const setor = setorDoEquipamento_(m.ID_EQUIPAMENTO);
     const emails = getEmailsNotificacao_(m.UNIDADE, setor);
-    if (!emails.length) return;
     const st = String(m.STATUS);
+    if (!emails.length) {
+      logEmail_(m.ID_MANUTENCAO, STATUS_MANUTENCAO_ROTULO[st] || st, '', 'NÃO ENVIADO',
+        'Nenhum e-mail ativo em CONFIG_EMAILS_MANUTENCAO para ' + m.UNIDADE + ' · ' + rotuloSetor_(setor));
+      return;
+    }
     const assunto = '[Central de Frota] ' + (STATUS_MANUTENCAO_ROTULO[st] || st) + ' — ' + m.NOME_EQUIPAMENTO +
       ' (' + m.UNIDADE + ' · ' + rotuloSetor_(setor) + ')';
     const corpo =
@@ -2339,8 +2588,41 @@ function notificarManutencao_(m) {
       '\nAcesse o app Central de Frota para acompanhar.';
     // [PERF 15/10] O e-mail vai para uma fila e sai pelo ciclo de 1 minuto
     // (intCiclo, no Integracoes.gs): quem salvou não espera o Gmail.
-    enfileirarEmail_({ to: emails.join(','), subject: assunto, body: corpo });
-  } catch (e) { /* notificação é bônus: nunca deve travar o registro */ }
+    // [19/10] Sai NA HORA (o registro já foi gravado e a trava já foi solta).
+    // A fila do ciclo de 1 minuto ficou só para quando o envio falhar —
+    // antes, se o ciclo não rodasse, o e-mail de fechamento nunca saía.
+    const msg = { to: emails.join(','), subject: assunto, body: corpo, _ref: m.ID_MANUTENCAO };
+    const etapa = STATUS_MANUTENCAO_ROTULO[st] || st;
+    try {
+      MailApp.sendEmail({ to: msg.to, subject: msg.subject, body: msg.body });
+      logEmail_(msg._ref, etapa, msg.to, 'ENVIADO', '');
+    } catch (eEnvio) {
+      console.error('Envio direto falhou: ' + eEnvio);
+      msg._tentativas = 1;
+      enfileirarEmail_(msg);
+      logEmail_(msg._ref, etapa, msg.to, 'FALHOU — VAI TENTAR DE NOVO', 'Tentativa 1: ' + (eEnvio.message || eEnvio));
+    }
+  } catch (e) {
+    // notificação é bônus: nunca trava o registro — mas agora fica anotada.
+    console.error('notificarManutencao_: ' + e);
+    logEmail_(m && m.ID_MANUTENCAO, m && m.STATUS, '', 'FALHA AO MONTAR', String(e && e.message || e));
+  }
+}
+
+// [19/10] Registro de cada e-mail na aba LOG_EMAILS (criada sozinha):
+// dá para ver se o aviso foi para a fila, saiu, ou por que não saiu.
+const ABA_LOG_EMAILS = 'LOG_EMAILS';
+function logEmail_(ref, etapa, para, resultado, detalhe) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sh = ss.getSheetByName(ABA_LOG_EMAILS);
+    if (!sh) {
+      sh = ss.insertSheet(ABA_LOG_EMAILS);
+      sh.appendRow(['DATA_HORA', 'CHAMADO', 'ETAPA', 'PARA', 'RESULTADO', 'DETALHE']);
+      sh.setFrozenRows(1);
+    }
+    sh.appendRow([formatarDataHoraBr_(nowIso_()), ref || '', etapa || '', para || '', resultado || '', detalhe || '']);
+  } catch (e) { console.error('logEmail_: ' + e); }
 }
 function notificarNovaManutencao_(m) { notificarManutencao_(m); }
 
@@ -2357,6 +2639,11 @@ function enfileirarEmail_(msg) {
 
 // Envia o que estiver na fila. Roda no intCiclo (a cada minuto); também
 // pode ser rodada à mão no editor.
+// [19/10] Antes, um e-mail que falhava (cota do dia, erro do Gmail) era
+// tirado da fila e perdido sem aviso. Agora ele volta para a fila e é
+// tentado de novo nos próximos ciclos (até 5 vezes), e tudo vai para a
+// aba LOG_EMAILS.
+const MAX_TENTATIVAS_EMAIL = 5;
 function enviarFilaEmails() {
   const props = PropertiesService.getScriptProperties();
   const todas = props.getProperties();
@@ -2364,9 +2651,73 @@ function enviarFilaEmails() {
   let enviados = 0;
   chaves.forEach(function (k) {
     props.deleteProperty(k); // tira antes: nunca manda o mesmo e-mail duas vezes
-    try { MailApp.sendEmail(JSON.parse(todas[k])); enviados++; } catch (e) { console.error('Fila de e-mail: ' + e); }
+    let msg;
+    try { msg = JSON.parse(todas[k]); } catch (e) { logEmail_('', '', '', 'DESCARTADO', 'Fila corrompida: ' + k); return; }
+    const ref = msg._ref || '', tent = (msg._tentativas || 0) + 1;
+    const etapa = String(msg.subject || '').replace('[Central de Frota] ', '').split(' — ')[0];
+    try {
+      MailApp.sendEmail({ to: msg.to, subject: msg.subject, body: msg.body });
+      enviados++;
+      logEmail_(ref, etapa, msg.to, 'ENVIADO', tent > 1 ? 'na tentativa ' + tent : '');
+    } catch (e) {
+      console.error('Fila de e-mail: ' + e);
+      if (tent < MAX_TENTATIVAS_EMAIL) {
+        msg._tentativas = tent;
+        props.setProperty(k, JSON.stringify(msg)); // volta para a fila
+        logEmail_(ref, etapa, msg.to, 'FALHOU — VAI TENTAR DE NOVO', 'Tentativa ' + tent + ': ' + (e.message || e));
+      } else {
+        logEmail_(ref, etapa, msg.to, 'FALHOU — DESISTIU', 'Após ' + tent + ' tentativas: ' + (e.message || e));
+      }
+    }
   });
   return enviados + ' e-mail(s) enviado(s).';
+}
+
+// [19/10] Rode pelo editor (▶ Executar) e veja o resultado em "Registro de
+// execução": diz se o ciclo de 1 minuto que esvazia a fila está ligado,
+// quantos e-mails estão parados na fila, a cota de envio que resta hoje e
+// quem recebe por unidade/setor.
+function diagnosticoEmails() {
+  const linhas = [];
+  const gatilhos = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  linhas.push('Gatilhos do projeto: ' + (gatilhos.length ? gatilhos.join(', ') : 'NENHUM'));
+  linhas.push(gatilhos.indexOf('intCiclo') > -1 || gatilhos.indexOf('enviarFilaEmails') > -1
+    ? 'OK: há gatilho que esvazia a fila de e-mails.'
+    : 'PROBLEMA: nenhum gatilho roda intCiclo/enviarFilaEmails — os e-mails ficam parados na fila. Rode instalarEnvioEmails().');
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const fila = Object.keys(props).filter(function (k) { return k.indexOf('MAIL_') === 0; });
+  linhas.push('E-mails parados na fila agora: ' + fila.length);
+  fila.forEach(function (k) {
+    try { const m = JSON.parse(props[k]); linhas.push('   • ' + m.subject + ' → ' + m.to); } catch (e) {}
+  });
+  linhas.push('Cota de e-mails que resta hoje: ' + MailApp.getRemainingDailyQuota());
+  readSheet_(SHEETS.EMAILS_MANUTENCAO).forEach(function (e) {
+    linhas.push('Lista: ' + e.UNIDADE + ' · ' + (e.SETOR || '(em branco = Operação)') + ' · ' + e.EMAIL + ' · ativo=' + e.ATIVO);
+  });
+  const txt = linhas.join('\n');
+  console.log(txt);
+  return txt;
+}
+
+// Liga um gatilho próprio, a cada minuto, só para a fila de e-mails —
+// use se o diagnóstico disser que o intCiclo não está agendado.
+function instalarEnvioEmails() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'enviarFilaEmails') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('enviarFilaEmails').timeBased().everyMinutes(1).create();
+  return 'Envio da fila de e-mails agendado a cada minuto.';
+}
+
+// Reenvia na hora o e-mail da situação atual de um chamado.
+// Ex.: troque o ID abaixo e rode reenviarEmailManutencao pelo editor.
+function reenviarEmailManutencao(idManutencao) {
+  const id = idManutencao || 'MAN-000000';
+  const m = findRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', id);
+  if (!m) throw new Error('Chamado não encontrado: ' + id);
+  anexarTemposManutencao_(m);
+  notificarManutencao_(m);
+  return enviarFilaEmails();
 }
 
 // [PERF 14/09] Validações fora da trava; a trava (comTravaEscrita_) cobre
@@ -2441,6 +2792,9 @@ function criarManutencao_(p) {
       SUBCATEGORIA: subcategoria,
       ABERTO_POR: abertoPor
     };
+    r.HORAS_PARADA = horasParadaManutencao_(r);
+    r.DATA_ABERTURA = dataPlanilha_(r.ABERTA_EM);
+    r.DATA_CONCLUSAO = r.STATUS === 'concluida' ? dataPlanilha_(r.CONCLUIDA_EM) : '';
     appendRow_(SHEETS.MANUTENCOES, r);
     sincronizarStatusEquipamentoPelaManutencao_(equipamento.ID_EQUIPAMENTO);
     return r;
@@ -2700,6 +3054,11 @@ function atualizarManutencao_(p) {
   emOrdem('INICIADA_EM', 'CONCLUIDA_EM', 'O fim da manutenção não pode ser antes do início.');
 
   const mudouStatus = updates.STATUS !== undefined && updates.STATUS !== String(atual.STATUS);
+  // [23/10] Coluna HORAS_PARADA sempre acompanha status e datas.
+  const final_ = Object.assign({}, atual, updates);
+  updates.HORAS_PARADA = horasParadaManutencao_(final_);
+  updates.DATA_ABERTURA = dataPlanilha_(final_.ABERTA_EM);
+  updates.DATA_CONCLUSAO = String(final_.STATUS) === 'concluida' ? dataPlanilha_(final_.CONCLUIDA_EM) : '';
   comTravaEscrita_(function () {
     updateRowById_(SHEETS.MANUTENCOES, 'ID_MANUTENCAO', id, updates);
     if (updates.STATUS !== undefined) sincronizarStatusEquipamentoPelaManutencao_(atual.ID_EQUIPAMENTO);
@@ -2762,8 +3121,46 @@ function ultimaTrocaGasDaFrota_(idEquipamento) {
 // Acima deste número de horas entre duas trocas da mesma frota, a troca
 // só é gravada se o operador confirmar. Mesmo valor do app.js.
 const LIMITE_HORAS_ENTRE_TROCAS = 25;
+// [22/10] O horímetro é digitado SEM vírgula e o último número do visor é a
+// FRAÇÃO da hora (décimo): 459209 = 45.920,9h. Toda diferença entre dois
+// horímetros digitados é dividida por 10 para virar hora de verdade.
+// Ex.: 459209 → 459213 = 0,4h (e não 4h); 45995 → 46002 = 0,7h (e não 7h).
+const HORIMETRO_DIVISOR = 10;
+function horasDoHorimetro_(diferenca) { return Math.round(Number(diferenca) / HORIMETRO_DIVISOR * 100) / 100; }
+// [09/11] Desde 28/10 o horímetro chega e fica gravado JÁ EM HORAS (o app lê
+// o número do visor e o Horimetro.gs ajusta a escala). Então a diferença
+// entre dois horímetros já é a hora rodada — não se divide mais por 10.
+// HORIMETRO_DIVISOR / horasDoHorimetro_ / fmtHorimetro_ ficam só por
+// compatibilidade (o Horimetro.gs pode usar); o Code.gs usa as duas abaixo.
+function horasEntreHorimetros_(diferenca) { return Math.round(Number(diferenca) * 100) / 100; }
+function fmtHorasHorimetro_(v) {
+  const n = Number(v);
+  if (v === '' || v === null || v === undefined || isNaN(n)) return String(v === null || v === undefined ? '' : v);
+  return n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' h';
+}
+// [09/11] Horas de um checklist fechado, igual à tela Horas rodadas do app:
+// HORAS_RODADAS quando o Horimetro.gs já revisou (tem o _DIGITADO do final);
+// senão final − inicial. Conta negativa ou acima de 24 h não entra.
+function horasDoChecklistFechado_(c) {
+  if (!textoLimpo_(c.FECHADO_EM)) return null;
+  const vazio = function (x) { return x === '' || x === null || x === undefined; };
+  let h = null;
+  if (!vazio(c.HORIMETRO_FINAL_DIGITADO)) {
+    if (vazio(c.HORAS_RODADAS)) return null;
+    h = Number(c.HORAS_RODADAS);
+  } else {
+    if (vazio(c.HORIMETRO_INICIAL) || vazio(c.HORIMETRO_FINAL)) return null;
+    h = horasEntreHorimetros_(Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL));
+  }
+  return h === null || isNaN(h) || h < 0 || h > 24 ? null : h;
+}
+function fmtHorimetro_(v) {
+  const t = String(v === null || v === undefined ? '' : v).replace(/\D/g, '');
+  return t.length > 1 ? Number(t.slice(0, -1)).toLocaleString('pt-BR') + ',' + t.slice(-1) : t;
+}
 
 function criarTrocaGas_(p) {
+  exigirPermissaoGas_(p.idUsuario);
   const unidade = exigirUnidade_(p.unidade);
   validarAcessoUnidade_(p.idUsuario, unidade);
 
@@ -2791,7 +3188,7 @@ function criarTrocaGas_(p) {
       horimetroAnterior + '). Confira o valor antes de salvar.'
     );
   }
-  const horasOperacao = horimetroAnterior !== null ? Math.round((horimetro - horimetroAnterior) * 100) / 100 : null;
+  const horasOperacao = horimetroAnterior !== null ? horasEntreHorimetros_(horimetro - horimetroAnterior) : null;
   // [OUT/2026] Trava de digitação: horas demais entre uma troca e outra
   // quase sempre é horímetro digitado errado. Não bloqueia — o app mostra
   // o aviso e o operador confirma ("Está certo, salvar"), e aí o pedido
@@ -2801,7 +3198,7 @@ function criarTrocaGas_(p) {
     throw new Error(
       'Verifique o horímetro: está dando ' + String(horasOperacao).replace('.', ',') +
       ' horas desde a última troca desta frota, acima das ' + LIMITE_HORAS_ENTRE_TROCAS +
-      'h esperadas. Horímetro anterior: ' + horimetroAnterior + ' · informado agora: ' + horimetro + '.'
+      'h esperadas. Horímetro anterior: ' + fmtHorasHorimetro_(horimetroAnterior) + ' · informado agora: ' + fmtHorasHorimetro_(horimetro) + '.'
     );
   }
   const agora = nowIso_();
@@ -2834,7 +3231,8 @@ function criarTrocaGas_(p) {
       HORAS_OPERACAO: horasOperacao !== null ? horasOperacao : '',
       CUSTO: fornecedorInfo.VALOR,
       DATA_HORA: agora,
-      QUANTIDADE_KG: quantidadeKg
+      QUANTIDADE_KG: quantidadeKg,
+      DATA: dataPlanilha_(agora)
     });
     return id;
   });
@@ -2878,7 +3276,7 @@ function deletarTrocaGas_(p) {
     const temConta = !isNaN(hAnt) && !isNaN(hSeg);
     updateRowById_(SHEETS.TROCAS_GAS, 'ID_TROCA_GAS', seguinte.ID_TROCA_GAS, {
       HORIMETRO_ANTERIOR: temConta ? hAnt : '',
-      HORAS_OPERACAO: temConta ? Math.max(0, hSeg - hAnt) : ''
+      HORAS_OPERACAO: temConta ? Math.max(0, horasEntreHorimetros_(hSeg - hAnt)) : ''
     });
   }
   return { ok: true, data: { ID_TROCA_GAS: id, removido: true } };
@@ -3095,6 +3493,141 @@ function configurarColunasHorimetro() {
   return 'Colunas novas prontas nas abas CHECKLISTS, MANUTENCOES e EQUIPAMENTOS.';
 }
 
+// ======================= [24/10] COLUNAS DE DATA (para o Looker Studio) =======================
+// As colunas DATA_HORA / ABERTA_EM / CONCLUIDA_EM são texto com fuso
+// ("2026-10-08T08:47:47-03:00") e o Looker não as entende como data — o
+// filtro de período deixava os cartões sem dados. Estas colunas novas são
+// DATA de verdade (célula de data da planilha, só o dia), que o Looker já
+// reconhece: use-as como "Dimensão do período".
+//   CHECKLISTS: DATA · MANUTENCOES: DATA_ABERTURA e DATA_CONCLUSAO · TROCAS_GAS: DATA
+function dataPlanilha_(valor) {
+  const d = parseData_(valor);
+  if (!d) return '';
+  const p = Utilities.formatDate(d, fusoHorario_(), 'yyyy-MM-dd').split('-');
+  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+}
+
+function prepararColunaData_(nomeAba, nomeColuna, fonte) {
+  const sh = sheet_(nomeAba);
+  const col = HEADERS[nomeAba].indexOf(nomeColuna) + 1;
+  const atual = String(sh.getRange(1, col).getValue() || '').trim();
+  if (atual !== nomeColuna) {
+    if (atual) throw new Error('A aba ' + nomeAba + ' já tem a coluna "' + atual + '" na posição ' + col +
+      ', onde deveria entrar ' + nomeColuna + '. Mova essa coluna para depois e rode configurarColunasData() de novo.');
+    sh.getRange(1, col).setValue(nomeColuna).setFontWeight('bold');
+  }
+  const v = sh.getDataRange().getValues();
+  const cab = v[0].map(function (h) { return String(h || '').trim(); });
+  const valores = [];
+  for (let i = 1; i < v.length; i++) {
+    const linha = {};
+    cab.forEach(function (h, j) { linha[h] = v[i][j] instanceof Date ? toIso_(v[i][j]) : v[i][j]; });
+    valores.push([fonte(linha)]);
+  }
+  if (valores.length) sh.getRange(2, col, valores.length, 1).setValues(valores);
+  sh.getRange(2, col, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('yyyy-mm-dd');
+  return valores.filter(function (x) { return x[0] !== ''; }).length;
+}
+
+// Cria as colunas de data e preenche tudo que já existe. Também refaz
+// HORAS_RODADAS e HORAS_PARADA (apaga fórmulas digitadas à mão nelas).
+// Roda sozinha uma vez; pode rodar de novo pelo editor quando quiser.
+function configurarColunasData() {
+  const r = [];
+  r.push('CHECKLISTS.DATA: ' + prepararColunaData_(SHEETS.CHECKLISTS, 'DATA', function (c) { return dataPlanilha_(c.DATA_HORA); }));
+  r.push('MANUTENCOES.DATA_ABERTURA: ' + prepararColunaData_(SHEETS.MANUTENCOES, 'DATA_ABERTURA', function (m) { return dataPlanilha_(m.ABERTA_EM); }));
+  r.push('MANUTENCOES.DATA_CONCLUSAO: ' + prepararColunaData_(SHEETS.MANUTENCOES, 'DATA_CONCLUSAO', function (m) {
+    return String(m.STATUS) === 'concluida' ? dataPlanilha_(m.CONCLUIDA_EM) : '';
+  }));
+  r.push('TROCAS_GAS.DATA: ' + prepararColunaData_(SHEETS.TROCAS_GAS, 'DATA', function (t) { return dataPlanilha_(t.DATA_HORA); }));
+  r.push(configurarHorasRodadasChecklist());
+  r.push(configurarHorasParada());
+  PropertiesService.getScriptProperties().setProperty('colunas_data_v1_ok', 'SIM');
+  MEMO_ABAS_ = {};
+  SpreadsheetApp.flush();
+  return r.join('\n');
+}
+
+// ======================= [23/10] HORAS_PARADA (para o Looker Studio) =======================
+// Coluna numérica na aba MANUTENCOES: horas que a máquina ficou parada no
+// chamado = CONCLUIDA_EM − ABERTA_EM, em horas com decimal (ex.: 3,58 =
+// 3h35min), tempo corrido. Só é preenchida quando o chamado está
+// finalizado; em aberto fica vazia. É número de verdade (as datas da aba são
+// texto), então o Looker Studio consegue somar e tirar média.
+function horasParadaManutencao_(m) {
+  if (String(m.STATUS) !== 'concluida') return '';
+  const ini = parseData_(m.ABERTA_EM), fim = parseData_(m.CONCLUIDA_EM);
+  if (!ini || !fim || fim < ini) return '';
+  return Math.round((fim.getTime() - ini.getTime()) / 36000) / 100;
+}
+
+// [23/10] Coluna HORAS_RODADAS na aba CHECKLISTS: horas em operação do
+// turno = HORIMETRO_FINAL − HORIMETRO_INICIAL (desde 28/10 os dois já estão
+// em horas; o Horimetro.gs revisa a coluna). Número de verdade, para o Looker.
+// Vazia enquanto o checklist não é fechado ou se falta um dos horímetros.
+function horasRodadasChecklist_(c) {
+  if (!textoLimpo_(c.FECHADO_EM)) return '';
+  const vazio = function (x) { return x === '' || x === null || x === undefined; };
+  if (vazio(c.HORIMETRO_INICIAL) || vazio(c.HORIMETRO_FINAL)) return '';
+  const ini = Number(c.HORIMETRO_INICIAL), fim = Number(c.HORIMETRO_FINAL);
+  if (isNaN(ini) || isNaN(fim) || fim < ini) return '';
+  return horasEntreHorimetros_(fim - ini);
+}
+
+function configurarHorasRodadasChecklist() {
+  const sh = sheet_(SHEETS.CHECKLISTS);
+  const col = HEADERS[SHEETS.CHECKLISTS].indexOf('HORAS_RODADAS') + 1;
+  const atual = String(sh.getRange(1, col).getValue() || '').trim();
+  if (atual !== 'HORAS_RODADAS') {
+    if (atual) throw new Error('A aba CHECKLISTS já tem a coluna "' + atual + '" na posição ' + col +
+      ', onde deveria entrar HORAS_RODADAS. Mova essa coluna para depois e rode configurarHorasRodadasChecklist() de novo.');
+    sh.getRange(1, col).setValue('HORAS_RODADAS').setFontWeight('bold');
+  }
+  const v = sh.getDataRange().getValues();
+  const cab = v[0].map(function (h) { return String(h || '').trim(); });
+  const idx = function (n) { return cab.indexOf(n); };
+  const valores = [];
+  for (let i = 1; i < v.length; i++) {
+    valores.push([horasRodadasChecklist_({ FECHADO_EM: v[i][idx('FECHADO_EM')],
+      HORIMETRO_INICIAL: v[i][idx('HORIMETRO_INICIAL')], HORIMETRO_FINAL: v[i][idx('HORIMETRO_FINAL')] })]);
+  }
+  if (valores.length) sh.getRange(2, col, valores.length, 1).setValues(valores);
+  sh.getRange(2, col, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('0.0');
+  PropertiesService.getScriptProperties().setProperty('horas_rodadas_chk_v1_ok', 'SIM');
+  SpreadsheetApp.flush();
+  const preenchidas = valores.filter(function (x) { return x[0] !== ''; }).length;
+  return 'Coluna HORAS_RODADAS pronta: ' + preenchidas + ' checklist(s) fechado(s) calculado(s) de ' + valores.length + '.';
+}
+
+// Cria a coluna (se faltar) e preenche todas as manutenções já existentes.
+// Roda sozinha uma vez; pode rodar de novo pelo editor quando quiser
+// (por exemplo, depois de corrigir datas direto na planilha).
+function configurarHorasParada() {
+  const sh = sheet_(SHEETS.MANUTENCOES);
+  const col = HEADERS[SHEETS.MANUTENCOES].indexOf('HORAS_PARADA') + 1;
+  const atual = String(sh.getRange(1, col).getValue() || '').trim();
+  if (atual !== 'HORAS_PARADA') {
+    if (atual) throw new Error('A aba MANUTENCOES já tem a coluna "' + atual + '" na posição ' + col +
+      ', onde deveria entrar HORAS_PARADA. Mova essa coluna para depois e rode configurarHorasParada() de novo.');
+    sh.getRange(1, col).setValue('HORAS_PARADA').setFontWeight('bold');
+  }
+  const v = sh.getDataRange().getValues();
+  const cab = v[0].map(function (h) { return String(h || '').trim(); });
+  const idx = function (n) { return cab.indexOf(n); };
+  const valores = [];
+  for (let i = 1; i < v.length; i++) {
+    valores.push([horasParadaManutencao_({ STATUS: v[i][idx('STATUS')], ABERTA_EM: v[i][idx('ABERTA_EM')], CONCLUIDA_EM: v[i][idx('CONCLUIDA_EM')] })]);
+  }
+  if (valores.length) {
+    sh.getRange(2, col, valores.length, 1).setValues(valores);
+  }
+  sh.getRange(2, col, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('0.00');
+  PropertiesService.getScriptProperties().setProperty('horas_parada_v1_ok', 'SIM');
+  SpreadsheetApp.flush();
+  const preenchidas = valores.filter(function (x) { return x[0] !== ''; }).length;
+  return 'Coluna HORAS_PARADA pronta: ' + preenchidas + ' manutenção(ões) finalizada(s) calculada(s) de ' + valores.length + '.';
+}
+
 function garantirColunasHorimetro_() {
   try {
     const cache = CacheService.getScriptCache();
@@ -3145,6 +3678,134 @@ function getPendenciasEquipamento_(params) {
 
 // Fechamento do checklist no fim do turno: o operador informa o horímetro
 // final da máquina. Só quem fez o checklist (ou um Administrador) fecha.
+// ======================= [21/10] HORAS RODADAS POR TIPO =======================
+// Empilhadeiras e lavadoras são analisadas separadas (rodam em ritmos bem
+// diferentes). O resto (paleteiras, transpaleteiras...) cai em "Outros".
+const GRUPOS_HORAS = [
+  { id: 'EMPILHADEIRA', rotulo: 'Empilhadeiras e paleteiras', ic: '🚜' },
+  { id: 'LAVADORA', rotulo: 'Lavadoras', ic: '🧽' },
+  { id: 'OUTROS', rotulo: 'Outros equipamentos', ic: '🔧' }
+];
+function grupoDoTipo_(tipo) {
+  const t = String(tipo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (t.indexOf('lavadora') > -1) return 'LAVADORA';
+  if (t.indexOf('empilhadeira') > -1 || t.indexOf('paleteira') > -1) return 'EMPILHADEIRA'; // [09/11] igual ao app
+  return 'OUTROS';
+}
+var MAPA_GRUPO_EQUIP_ = null;
+function grupoDoEquipamento_(idEquipamento) {
+  if (!MAPA_GRUPO_EQUIP_) {
+    MAPA_GRUPO_EQUIP_ = {};
+    readSheet_(SHEETS.EQUIPAMENTOS).forEach(function (e) { MAPA_GRUPO_EQUIP_[String(e.ID_EQUIPAMENTO)] = grupoDoTipo_(e.TIPO); });
+  }
+  return MAPA_GRUPO_EQUIP_[String(idEquipamento)] || 'OUTROS';
+}
+
+// Turnos fechados com os dois horímetros, agrupados por tipo → máquina → dia.
+function calcularHorasRodadas_(checklists) {
+  const grupos = {};
+  GRUPOS_HORAS.forEach(function (g) { grupos[g.id] = { id: g.id, rotulo: g.rotulo, ic: g.ic, total: 0, turnos: 0, maquinas: {}, dias: {} }; });
+  let emAberto = 0;
+  checklists.forEach(function (c) {
+    if (!textoLimpo_(c.FECHADO_EM)) { emAberto++; return; }
+    const h = horasDoChecklistFechado_(c); // [09/11] mesma conta da tela Horas rodadas
+    if (h === null) return;
+    const g = grupos[grupoDoEquipamento_(c.ID_EQUIPAMENTO)];
+    const dia = chkChaveDia_(c.DATA_HORA);
+    g.total += h; g.turnos++;
+    const k = String(c.ID_EQUIPAMENTO);
+    const m = g.maquinas[k] || (g.maquinas[k] = { nome: c.NOME_EQUIPAMENTO, horas: 0, turnos: 0, dias: {} });
+    m.horas += h; m.turnos++; m.dias[dia] = true;
+    const d = g.dias[dia] || (g.dias[dia] = { horas: 0, turnos: 0 });
+    d.horas += h; d.turnos++;
+  });
+  const lista = GRUPOS_HORAS.map(function (gd) {
+    const g = grupos[gd.id];
+    const maquinas = Object.keys(g.maquinas).map(function (k) {
+      const m = g.maquinas[k], nd = Object.keys(m.dias).length;
+      return { nome: m.nome, horas: Math.round(m.horas * 10) / 10, turnos: m.turnos, dias: nd, mediaDia: nd ? Math.round(m.horas / nd * 10) / 10 : 0 };
+    }).sort(function (a, b) { return b.horas - a.horas; });
+    const dias = Object.keys(g.dias).sort().reverse().map(function (k) {
+      return { dia: k, horas: Math.round(g.dias[k].horas * 10) / 10, turnos: g.dias[k].turnos };
+    });
+    return { id: g.id, rotulo: g.rotulo, ic: g.ic, total: Math.round(g.total * 10) / 10, turnos: g.turnos,
+      maquinas: maquinas, dias: dias, mediaDia: dias.length ? Math.round(g.total / dias.length * 10) / 10 : 0 };
+  }).filter(function (g) { return g.turnos > 0; });
+  return { grupos: lista, emAberto: emAberto };
+}
+
+function hh_(v) { return String(Math.round((Number(v) || 0) * 10) / 10).replace('.', ',') + 'h'; }
+
+// PDF de horas rodadas (um bloco por tipo). Com enviarEmail = true, manda o
+// PDF para a lista de e-mails da unidade/setor (CONFIG_EMAILS_MANUTENCAO).
+function gerarHorasRodadasPDF_(p) {
+  const unidade = exigirUnidade_(p.unidade);
+  validarAcessoUnidade_(p.idUsuario, unidade);
+  const params = Object.assign({}, p, { unidade: unidade, periodo: p.periodo || 'semana' });
+  const janela = resolverPeriodo_(params);
+  const r = calcularHorasRodadas_(getChecklists_(params));
+  if (p.grupo) r.grupos = r.grupos.filter(function (g) { return g.id === String(p.grupo); }); // [09/11] aba do app
+  const unidadeLabel = unidade + ' · ' + (SETOR_PEDIDO_ ? rotuloSetor_(SETOR_PEDIDO_) : 'Fábrica e Operação');
+  const rotDia = function (k) { const pt = k.split('-'); return pt.length === 3 ? pt[2] + '/' + pt[1] + '/' + pt[0] : k; };
+
+  const doc = DocumentApp.create('tmp_horas_' + new Date().getTime());
+  const body = doc.getBody();
+  body.setMarginTop(34).setMarginBottom(34).setMarginLeft(38).setMarginRight(38);
+  try {
+    body.appendImage(Utilities.newBlob(Utilities.base64Decode(LOGO_ICC_BASE64), 'image/png', 'logo.png')).setWidth(48).setHeight(48);
+  } catch (e) { /* segue sem a logo */ }
+  body.appendParagraph('ICC Brazil · Central de Frota').editAsText().setFontSize(10).setForegroundColor('#6b7280');
+  body.appendParagraph('Horas rodadas — empilhadeiras e lavadoras').setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  body.appendParagraph(unidadeLabel + '  ·  ' + janela.label).editAsText().setFontSize(11).setBold(true);
+  body.appendParagraph('Horímetro final − inicial de cada checklist fechado · gerado em ' + formatarDataHoraBr_(nowIso_()) +
+    (p.geradoPor ? ' por ' + p.geradoPor : '')).editAsText().setFontSize(9).setForegroundColor('#6b7280');
+
+  if (!r.grupos.length) {
+    body.appendParagraph('Nenhum checklist fechado com horímetro neste período.');
+  } else {
+    body.appendParagraph('Resumo por tipo').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    chkTabela_(body, ['Tipo', 'Horas rodadas', 'Turnos fechados', 'Máquinas', 'Média por dia'],
+      r.grupos.map(function (g) { return [g.rotulo, hh_(g.total), g.turnos, g.maquinas.length, hh_(g.mediaDia)]; }));
+    r.grupos.forEach(function (g) {
+      body.appendParagraph(g.rotulo).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+      body.appendParagraph(hh_(g.total) + ' rodadas em ' + g.turnos + ' turno(s) · ' + g.maquinas.length + ' máquina(s) · média ' + hh_(g.mediaDia) + ' por dia')
+        .editAsText().setFontSize(10);
+      body.appendParagraph('Por máquina').setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      chkTabela_(body, ['Máquina', 'Horas rodadas', 'Turnos', 'Dias', 'Média por dia'],
+        g.maquinas.map(function (m) { return [m.nome, hh_(m.horas), m.turnos, m.dias, hh_(m.mediaDia)]; }));
+      body.appendParagraph('Por dia').setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      chkTabela_(body, ['Dia', 'Horas rodadas', 'Turnos'],
+        g.dias.slice(0, 31).map(function (d) { return [rotDia(d.dia), hh_(d.horas), d.turnos]; }));
+    });
+  }
+  if (r.emAberto) body.appendParagraph(r.emAberto + ' checklist(s) ainda sem fechamento ficaram fora da conta.')
+    .editAsText().setFontSize(9).setForegroundColor('#b45309');
+  doc.saveAndClose();
+  const res = chkFinalizarPdf_(doc, unidadeLabel);
+  res.filename = res.filename.replace(/^checklists_/, 'horas_rodadas_');
+
+  if (p.enviarEmail) {
+    const emails = getEmailsNotificacao_(unidade, SETOR_PEDIDO_ || '');
+    if (!emails.length) throw new Error('Nenhum e-mail ativo cadastrado para ' + unidadeLabel + ' (aba CONFIG_EMAILS_MANUTENCAO).');
+    const corpo = 'Horas rodadas — ' + unidadeLabel + ' · ' + janela.label + '\n\n' +
+      (r.grupos.length ? r.grupos.map(function (g) {
+        return g.rotulo.toUpperCase() + ': ' + hh_(g.total) + ' em ' + g.turnos + ' turno(s), média ' + hh_(g.mediaDia) + '/dia\n' +
+          g.maquinas.map(function (m) { return '  - ' + m.nome + ': ' + hh_(m.horas) + ' (' + m.turnos + ' turno(s))'; }).join('\n');
+      }).join('\n\n') : 'Nenhum checklist fechado com horímetro neste período.') +
+      '\n\nO PDF completo vai em anexo.\nCentral de Frota · ICC Brazil';
+    MailApp.sendEmail({
+      to: emails.join(','),
+      subject: '[Central de Frota] Horas rodadas — ' + unidadeLabel + ' · ' + janela.label,
+      body: corpo,
+      attachments: [Utilities.newBlob(Utilities.base64Decode(res.base64), 'application/pdf', res.filename)]
+    });
+    logEmail_('', 'Horas rodadas', emails.join(','), 'ENVIADO', janela.label);
+    res.enviadoPara = emails;
+  }
+  return res;
+}
+
+const MAX_HORAS_TURNO = 12;
 function fecharChecklist_(p) {
   const id = textoLimpo_(p.idChecklist);
   if (!id) throw new Error('Informe o checklist a fechar.');
@@ -3166,14 +3827,17 @@ function fecharChecklist_(p) {
   if (inicial !== null && !isNaN(inicial) && final < inicial) {
     throw new Error('O horímetro final (' + final + ') é menor que o inicial deste checklist (' + inicial + '). Confira o valor.');
   }
+  // [22/10] Sem trava de horas: o app mostra a conta (inicial → final = horas)
+  // e pede confirmação, sinalizando quando parece erro de digitação.
   const agora = nowIso_();
-  updateRowById_(SHEETS.CHECKLISTS, 'ID_CHECKLIST', id, { HORIMETRO_FINAL: final, FECHADO_EM: agora });
+  updateRowById_(SHEETS.CHECKLISTS, 'ID_CHECKLIST', id, { HORIMETRO_FINAL: final, FECHADO_EM: agora,
+    HORAS_RODADAS: horasRodadasChecklist_({ HORIMETRO_INICIAL: inicial === null ? '' : inicial, HORIMETRO_FINAL: final, FECHADO_EM: agora }) });
   invalidarCachePainel_(atual.UNIDADE);
   return {
     ok: true,
     data: {
       ID_CHECKLIST: id, HORIMETRO_INICIAL: inicial === null ? '' : inicial, HORIMETRO_FINAL: final, FECHADO_EM: agora,
-      horasTrabalhadas: inicial !== null && !isNaN(inicial) ? Math.round((final - inicial) * 100) / 100 : null
+      horasTrabalhadas: inicial !== null && !isNaN(inicial) ? horasEntreHorimetros_(final - inicial) : null
     }
   };
 }
@@ -3383,7 +4047,7 @@ function criarCarregamento_(p) {
   if (anterior !== null && !isNaN(anterior) && horimetro < anterior) {
     throw new Error('O horímetro informado (' + horimetro + ') é menor que o da última carga desta frota (' + anterior + '). Confira o valor.');
   }
-  const horasOperacao = anterior !== null && !isNaN(anterior) ? Math.round((horimetro - anterior) * 100) / 100 : null;
+  const horasOperacao = anterior !== null && !isNaN(anterior) ? horasEntreHorimetros_(horimetro - anterior) : null;
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(ABA_CARREGAMENTOS);
@@ -3441,7 +4105,7 @@ function deletarCarregamento_(p) {
     for (let i = 1; i < v2.length; i++) {
       if (String(v2[i][colId]) === String(seguinte.ID_CARREGAMENTO)) {
         sh.getRange(i + 1, cab.indexOf('HORIMETRO_ANTERIOR') + 1).setValue(temConta ? hAnt : '');
-        sh.getRange(i + 1, cab.indexOf('HORAS_OPERACAO') + 1).setValue(temConta ? Math.max(0, hSeg - hAnt) : '');
+        sh.getRange(i + 1, cab.indexOf('HORAS_OPERACAO') + 1).setValue(temConta ? Math.max(0, horasEntreHorimetros_(hSeg - hAnt)) : '');
         break;
       }
     }
@@ -4389,6 +5053,52 @@ function invalidarCachePainel_(unidade) {
   } catch (e) { /* falha ao invalidar não deve quebrar o registro; o cache expira sozinho em 20s */ }
 }
 
+// [19/10] Prazo de fechamento do checklist por turno (pelo horário em que
+// o checklist foi aberto):
+//   Turno A: aberto das 07:30 às 17:29 → fechar até 18:00 do mesmo dia.
+//   Turno B: aberto das 17:30 em diante → fechar até 02:40 do dia seguinte
+//            (aberto entre 00:00 e 02:40 → conta como B, até 02:40 desse dia).
+//   Aberto entre 02:41 e 07:29 → conta como início do Turno A.
+const TURNOS_FECHAMENTO = {
+  A: { rotulo: 'Turno A', horario: '07:30 às 18:00', inicioMin: 7 * 60 + 30, prazoH: 18, prazoM: 0 },
+  B: { rotulo: 'Turno B', horario: '17:30 às 02:40', inicioMin: 17 * 60 + 30, prazoH: 2, prazoM: 40 }
+};
+const DIAS_PENDENCIA_FECHAMENTO = 7; // checklists abertos há mais que isso não entram no painel
+
+function turnoDoChecklist_(abertura) {
+  const min = abertura.getHours() * 60 + abertura.getMinutes();
+  const fimB = TURNOS_FECHAMENTO.B.prazoH * 60 + TURNOS_FECHAMENTO.B.prazoM;
+  const dia = function (somaDias, h, m) {
+    return new Date(abertura.getFullYear(), abertura.getMonth(), abertura.getDate() + somaDias, h, m, 0);
+  };
+  if (min >= TURNOS_FECHAMENTO.B.inicioMin) return { turno: 'B', prazo: dia(1, TURNOS_FECHAMENTO.B.prazoH, TURNOS_FECHAMENTO.B.prazoM) };
+  if (min <= fimB) return { turno: 'B', prazo: dia(0, TURNOS_FECHAMENTO.B.prazoH, TURNOS_FECHAMENTO.B.prazoM) };
+  return { turno: 'A', prazo: dia(0, TURNOS_FECHAMENTO.A.prazoH, TURNOS_FECHAMENTO.A.prazoM) };
+}
+
+function pendenciasFechamentoChecklist_(checklists, idsEquip, agora) {
+  const corte = agora.getTime() - DIAS_PENDENCIA_FECHAMENTO * 86400000;
+  return checklists
+    .filter(function (c) { return !textoLimpo_(c.FECHADO_EM) && idsEquip[String(c.ID_EQUIPAMENTO)]; })
+    .map(function (c) {
+      const abertura = parseData_(c.DATA_HORA);
+      if (!abertura || abertura.getTime() < corte) return null;
+      const t = turnoDoChecklist_(abertura);
+      const atrasado = agora.getTime() > t.prazo.getTime();
+      const ms = Math.abs(agora.getTime() - t.prazo.getTime());
+      return {
+        ID_CHECKLIST: c.ID_CHECKLIST, ID_EQUIPAMENTO: c.ID_EQUIPAMENTO, NOME_EQUIPAMENTO: c.NOME_EQUIPAMENTO,
+        RESPONSAVEL: c.RESPONSAVEL, DATA_HORA: normalizarDataIso_(c.DATA_HORA),
+        HORIMETRO_INICIAL: c.HORIMETRO_INICIAL,
+        TURNO: t.turno, TURNO_ROTULO: TURNOS_FECHAMENTO[t.turno].rotulo, TURNO_HORARIO: TURNOS_FECHAMENTO[t.turno].horario,
+        PRAZO: normalizarDataIso_(t.prazo), ATRASADO: atrasado,
+        TEMPO_MS: atrasado ? ms : -ms, TEMPO_TEXTO: formatarDuracao_(ms)
+      };
+    })
+    .filter(Boolean)
+    .sort(function (a, b) { return b.TEMPO_MS - a.TEMPO_MS; }); // mais atrasado primeiro
+}
+
 function getPainelCalcular_(params) {
   const unidade = params.unidade;
   const agora = new Date();
@@ -4528,7 +5238,11 @@ function getPainelCalcular_(params) {
       .sort(function (a, b) { return b.TEMPO_MS - a.TEMPO_MS; }),
     preventivasProximas: preventivasProximas,
     checklistDoDia: checklistDoDia,
-    checklistDoDiaResumo: { total: checklistDoDia.length, feitos: feitos, pendentes: checklistDoDia.length - feitos }
+    checklistDoDiaResumo: { total: checklistDoDia.length, feitos: feitos, pendentes: checklistDoDia.length - feitos },
+    // [19/10] Checklists sem fechamento (horímetro final), com o prazo do turno.
+    pendenciasFechamento: pendenciasFechamentoChecklist_(checklists,
+      equipamentos.reduce(function (acc, e) { acc[String(e.ID_EQUIPAMENTO)] = true; return acc; }, {}), agora),
+    turnosFechamento: [TURNOS_FECHAMENTO.A, TURNOS_FECHAMENTO.B].map(function (t) { return t.rotulo + ': ' + t.horario; })
   };
 }
 
@@ -4861,10 +5575,8 @@ function getRelatorio_(params) {
   const rodadasPorFrota = {};
   filtrarPorUnidade_(readSheet_(SHEETS.CHECKLISTS), params.unidade).forEach(function (c) {
     if (!textoLimpo_(c.FECHADO_EM) || !dentroDoPeriodo_(c.DATA_HORA, janela)) return;
-    if (c.HORIMETRO_INICIAL === '' || c.HORIMETRO_INICIAL === null || c.HORIMETRO_INICIAL === undefined) return;
-    if (c.HORIMETRO_FINAL === '' || c.HORIMETRO_FINAL === null || c.HORIMETRO_FINAL === undefined) return;
-    const rodou = Number(c.HORIMETRO_FINAL) - Number(c.HORIMETRO_INICIAL);
-    if (isNaN(rodou) || rodou < 0) return;
+    const rodou = horasDoChecklistFechado_(c); // [09/11] mesma conta da tela Horas rodadas
+    if (rodou === null) return;
     const chave = String(c.ID_EQUIPAMENTO);
     rodadasPorFrota[chave] = (rodadasPorFrota[chave] || 0) + rodou;
   });
@@ -5218,7 +5930,17 @@ function frotasDoExecutivo_(params, rel, gas) {
   const operacao = rel.horasPorMaquina
     .filter(function (h) { return h.operacaoHoras !== null && h.operacaoHoras !== undefined; })
     .sort(function (a, b) { return b.operacaoHoras - a.operacaoHoras; })
-    .map(function (h) { return { frota: nome(h.nomeEquipamento, h.unidade), horas: h.operacaoHoras, texto: h.operacaoTexto }; });
+    .map(function (h) {
+      return { frota: nome(h.nomeEquipamento, h.unidade), horas: h.operacaoHoras, texto: h.operacaoTexto,
+        grupo: grupoDoEquipamento_(h.idEquipamento) };
+    });
+  // [21/10] Empilhadeiras e lavadoras separadas.
+  const operacaoPorGrupo = GRUPOS_HORAS.map(function (g) {
+    const frotas = operacao.filter(function (x) { return x.grupo === g.id; });
+    const total = frotas.reduce(function (t, x) { return t + x.horas; }, 0);
+    return { grupo: g.id, rotulo: g.rotulo, ic: g.ic, frotas: frotas, totalHoras: Math.round(total * 10) / 10,
+      totalTexto: formatarHoras_(total * 3600000) };
+  }).filter(function (g) { return g.frotas.length; });
 
   // ---- Gás por frota: quem gastou e trocou mais, e se rodou mais ----
   const comHoras = gas.custoEKgPorFrota.filter(function (g) { return g.horasOperacao; });
@@ -5290,6 +6012,7 @@ function frotasDoExecutivo_(params, rel, gas) {
     horasManutencaoTotal: h1(imp.manutencaoMs), horasManutencaoTotalTexto: imp.manutencaoTexto,
     manutencoesPorFrota: manutencoes,
     operacaoPorFrota: operacao,
+    operacaoPorGrupo: operacaoPorGrupo,
     operacaoTotalHoras: imp.operacaoRealHoras, operacaoTotalTexto: imp.operacaoRealTexto, maquinasComHorimetro: imp.maquinasComHorimetro,
     gasPorFrota: gasPorFrota,
     gasTotalTrocas: gas.indicadores.totalTrocas, gasCustoTotal: gas.indicadores.custoTotal, gasKgTotal: gas.indicadores.kgTotal,
@@ -5985,9 +6708,12 @@ function gerarRelatorioExecutivoPDF_(p) {
   graficoPorFrota('Quantidade de manutenções por frota',
     F.manutencoesPorFrota.map(function (x) { return { rotulo: x.frota, valor: x.quantidade }; }), 'Manutenções', LARANJA,
     mInd.manutencoesTotal + ' manutenção(ões) aberta(s) no período.');
-  graficoPorFrota('Horas em operação por frota',
-    F.operacaoPorFrota.map(function (x) { return { rotulo: x.frota, valor: x.horas }; }), 'Horas rodadas', VERDE,
-    F.operacaoTotalTexto + ' rodadas no total, pelo horímetro do checklist.');
+  // [21/10] Um gráfico por tipo: empilhadeiras e lavadoras separadas.
+  (F.operacaoPorGrupo || []).forEach(function (g) {
+    graficoPorFrota('Horas rodadas · ' + g.rotulo,
+      g.frotas.map(function (x) { return { rotulo: x.frota, valor: x.horas }; }), 'Horas rodadas', VERDE,
+      g.totalTexto + ' rodadas por ' + g.rotulo.toLowerCase() + ' no período, pelo horímetro do checklist.');
+  });
   graficoPorFrota('Trocas de gás por frota',
     F.gasPorFrota.slice().sort(function (a, b) { return b.trocas - a.trocas; }).map(function (x) { return { rotulo: x.frota, valor: x.trocas }; }), 'Trocas', '#3B82C4',
     F.gasTotalTrocas + ' troca(s) de gás no período.');
@@ -6108,6 +6834,195 @@ function fmtMoedaGs_(v) {
   return 'R$ ' + (Math.round((Number(v) || 0) * 100) / 100).toFixed(2).replace('.', ',');
 }
 
+// ======================= [21/10] RELATÓRIOS AUTOMÁTICOS SEMANAL / MENSAL =======================
+// Quem recebe fica na aba CONFIG_EMAILS_RELATORIOS (criada sozinha):
+//   EMAIL | UNIDADE | GRUPO | SETOR | ATIVO | OBSERVACAO
+// GRUPO:
+//   UNIDADE   → semanal + mensal: PDF Executivo da unidade dele.
+//   GESTAO    → só mensal: PDF Executivo com TODAS as unidades (UNIDADE é ignorada).
+//   SEGURANCA → semanal + mensal: só o PDF dos checklists realizados da unidade
+//               (UNIDADE = TODAS recebe o PDF com todas as unidades).
+// SETOR: FABRICA, OPERACAO ou em branco/TODOS = os dois. ATIVO: SIM/NAO.
+// Semanal: toda segunda ~07:00, com a semana anterior (seg a dom).
+// Mensal: todo dia 1 ~07:00, com o mês anterior.
+// Ligar: rode instalarEnviosRelatorios() uma vez pelo editor.
+const ABA_EMAILS_RELATORIOS = 'CONFIG_EMAILS_RELATORIOS';
+const CAB_EMAILS_RELATORIOS = ['EMAIL', 'UNIDADE', 'GRUPO', 'SETOR', 'ATIVO', 'OBSERVACAO'];
+const GRUPOS_RELATORIO = ['UNIDADE', 'GESTAO', 'SEGURANCA'];
+
+function abaEmailsRelatorios_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(ABA_EMAILS_RELATORIOS);
+  if (!sh) {
+    sh = ss.insertSheet(ABA_EMAILS_RELATORIOS);
+    sh.getRange(1, 1, 1, CAB_EMAILS_RELATORIOS.length).setValues([CAB_EMAILS_RELATORIOS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange(2, 1, 3, CAB_EMAILS_RELATORIOS.length).setValues([
+      ['exemplo.unidade@iccbrazil.com.br', 'Macatuba', 'UNIDADE', '', 'NAO', 'Exemplo — troque o e-mail e ponha SIM'],
+      ['exemplo.gestao@iccbrazil.com.br', 'TODAS', 'GESTAO', '', 'NAO', 'Gestão: só mensal, todas as unidades'],
+      ['exemplo.seguranca@iccbrazil.com.br', 'Macatuba', 'SEGURANCA', '', 'NAO', 'Segurança: só PDF de checklists']
+    ]);
+    // Lista suspensa nas colunas GRUPO, SETOR e ATIVO.
+    const lista = function (vals) { return SpreadsheetApp.newDataValidation().requireValueInList(vals, true).setAllowInvalid(false).build(); };
+    sh.getRange(2, 3, 500, 1).setDataValidation(lista(GRUPOS_RELATORIO));
+    sh.getRange(2, 4, 500, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['', 'FABRICA', 'OPERACAO', 'TODOS'], true).build());
+    sh.getRange(2, 5, 500, 1).setDataValidation(lista(['SIM', 'NAO']));
+    const unidades = getUnidades_().map(function (u) { return u.UNIDADE; }).concat(['TODAS']);
+    if (unidades.length) sh.getRange(2, 2, 500, 1).setDataValidation(lista(unidades));
+    sh.autoResizeColumns(1, CAB_EMAILS_RELATORIOS.length);
+  }
+  return sh;
+}
+
+function destinatariosRelatorios_() {
+  const sh = abaEmailsRelatorios_();
+  const v = sh.getDataRange().getValues();
+  const cab = v[0].map(function (h) { return String(h || '').trim().toUpperCase(); });
+  const col = function (n) { return cab.indexOf(n); };
+  const out = [];
+  for (let i = 1; i < v.length; i++) {
+    const email = String(v[i][col('EMAIL')] || '').trim();
+    if (!email || email.indexOf('@') === -1) continue;
+    if (String(v[i][col('ATIVO')] || '').trim().toUpperCase() !== 'SIM') continue;
+    const grupo = String(v[i][col('GRUPO')] || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+    if (GRUPOS_RELATORIO.indexOf(grupo) === -1) continue;
+    const setorTxt = String(v[i][col('SETOR')] || '');
+    out.push({
+      email: email.toLowerCase(), grupo: grupo,
+      unidade: grupo === 'GESTAO' ? 'TODAS' : (String(v[i][col('UNIDADE')] || '').trim() || 'TODAS'),
+      setor: setorEhTodos_(setorTxt) ? '' : normalizarSetor_(setorTxt)
+    });
+  }
+  return out;
+}
+
+function fmtIsoDia_(d) { return Utilities.formatDate(d, fusoHorario_(), 'yyyy-MM-dd'); }
+// Semana anterior (segunda a domingo) e mês anterior, a partir de "hoje".
+function periodoRelatorio_(tipo, hoje) {
+  const h = hoje || new Date();
+  if (tipo === 'SEMANAL') {
+    const dow = (h.getDay() + 6) % 7; // 0 = segunda
+    const segAtual = new Date(h.getFullYear(), h.getMonth(), h.getDate() - dow);
+    const ini = new Date(segAtual.getFullYear(), segAtual.getMonth(), segAtual.getDate() - 7);
+    const fim = new Date(segAtual.getFullYear(), segAtual.getMonth(), segAtual.getDate() - 1);
+    return { dataInicio: fmtIsoDia_(ini), dataFim: fmtIsoDia_(fim),
+      rotulo: 'semana de ' + Utilities.formatDate(ini, fusoHorario_(), 'dd/MM') + ' a ' + Utilities.formatDate(fim, fusoHorario_(), 'dd/MM/yyyy') };
+  }
+  const ini = new Date(h.getFullYear(), h.getMonth() - 1, 1);
+  const fim = new Date(h.getFullYear(), h.getMonth(), 0);
+  const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  return { dataInicio: fmtIsoDia_(ini), dataFim: fmtIsoDia_(fim), rotulo: MESES[ini.getMonth()] + ' de ' + ini.getFullYear() };
+}
+
+// Junta os destinatários por PDF (mesmo relatório + unidade + setor = um
+// PDF só, mandado para todos de uma vez).
+function montarFilaRelatorios_(tipo, emailTeste) {
+  const per = periodoRelatorio_(tipo);
+  const jobs = {};
+  destinatariosRelatorios_().forEach(function (d) {
+    if (tipo === 'SEMANAL' && d.grupo === 'GESTAO') return; // gestão: só mensal
+    const rel = d.grupo === 'SEGURANCA' ? 'CHECKLISTS' : 'EXECUTIVO';
+    const k = [rel, d.unidade, d.setor].join('|');
+    if (!jobs[k]) jobs[k] = { tipo: tipo, rel: rel, unidade: d.unidade, setor: d.setor, dataInicio: per.dataInicio, dataFim: per.dataFim, rotulo: per.rotulo, para: [] };
+    if (jobs[k].para.indexOf(d.email) === -1) jobs[k].para.push(d.email);
+  });
+  const lista = Object.keys(jobs).map(function (k) { return jobs[k]; });
+  if (emailTeste) lista.forEach(function (j) { j.paraOriginal = j.para; j.para = [emailTeste]; });
+  return lista;
+}
+
+function enviarRelatoriosSemanais() { iniciarEnvioRelatorios_('SEMANAL'); }
+function enviarRelatoriosMensais() { iniciarEnvioRelatorios_('MENSAL'); }
+
+function iniciarEnvioRelatorios_(tipo, emailTeste) {
+  const props = PropertiesService.getScriptProperties();
+  const fila = JSON.parse(props.getProperty('REL_FILA') || '[]').concat(montarFilaRelatorios_(tipo, emailTeste));
+  props.setProperty('REL_FILA', JSON.stringify(fila));
+  if (!fila.length) { logEmail_('', 'Relatório ' + tipo.toLowerCase(), '', 'NÃO ENVIADO', 'Ninguém ativo na aba ' + ABA_EMAILS_RELATORIOS); return 'Ninguém para enviar.'; }
+  return continuarEnvioRelatorios();
+}
+
+// Gera e manda um PDF por vez. Um PDF leva de 20s a 1min; o Google corta
+// a execução em 6min, então perto de 4min30 ele agenda a continuação para
+// 1 minuto depois e para — ninguém fica sem receber.
+function continuarEnvioRelatorios() {
+  const inicio = Date.now();
+  const props = PropertiesService.getScriptProperties();
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'continuarEnvioRelatorios') ScriptApp.deleteTrigger(t);
+  });
+  garantirEstrutura_();
+  let fila = JSON.parse(props.getProperty('REL_FILA') || '[]');
+  let enviados = 0;
+  while (fila.length) {
+    if (Date.now() - inicio > 270000) {
+      ScriptApp.newTrigger('continuarEnvioRelatorios').timeBased().after(60000).create();
+      break;
+    }
+    const j = fila.shift();
+    props.setProperty('REL_FILA', JSON.stringify(fila)); // tira antes: um PDF com erro não trava os outros
+    try { enviarJobRelatorio_(j); enviados++; }
+    catch (e) {
+      console.error('Relatório ' + j.rel + ' ' + j.unidade + ': ' + e);
+      j.tentativas = (j.tentativas || 0) + 1;
+      if (j.tentativas < 3) { fila.push(j); props.setProperty('REL_FILA', JSON.stringify(fila)); }
+      logEmail_('', 'Relatório ' + j.tipo.toLowerCase() + ' · ' + j.rel, j.para.join(','),
+        j.tentativas < 3 ? 'FALHOU — VAI TENTAR DE NOVO' : 'FALHOU — DESISTIU', j.unidade + ': ' + (e.message || e));
+    }
+  }
+  return enviados + ' relatório(s) enviado(s); ' + fila.length + ' na fila.';
+}
+
+function enviarJobRelatorio_(j) {
+  SETOR_PEDIDO_ = j.setor || '';
+  MAPA_SETOR_EQUIP_ = null;
+  MAPA_GRUPO_EQUIP_ = null;
+  const params = { unidade: j.unidade, periodo: 'custom', dataInicio: j.dataInicio, dataFim: j.dataFim, geradoPor: 'envio automático' };
+  const res = j.rel === 'CHECKLISTS' ? gerarChecklistsPDF_(params) : gerarRelatorioExecutivoPDF_(params);
+  const ondeTxt = (ehTodasUnidades_(j.unidade) ? 'Todas as unidades' : j.unidade) + ' · ' + (j.setor ? rotuloSetor_(j.setor) : 'Fábrica e Operação');
+  const nomeRel = j.rel === 'CHECKLISTS' ? 'Checklists realizados' : 'Relatório executivo';
+  const freq = j.tipo === 'SEMANAL' ? 'semanal' : 'mensal';
+  const assunto = '[Central de Frota] ' + nomeRel + ' ' + freq + ' — ' + ondeTxt + ' · ' + j.rotulo;
+  const corpo = 'Olá,\n\nSegue em anexo o ' + nomeRel.toLowerCase() + ' ' + freq + ' de ' + ondeTxt + ', referente ' + (j.tipo === 'SEMANAL' ? 'à ' : 'a ') + j.rotulo + '.\n\n' +
+    (j.rel === 'CHECKLISTS'
+      ? 'O PDF traz os checklists realizados no período, os itens NOK e as não conformidades.\n'
+      : 'O PDF traz manutenção (paradas, chamados, tempos), lavagem, troca de gás e horas rodadas de empilhadeiras e lavadoras.\n') +
+    (res.url ? '\nTambém disponível no Drive: ' + res.url + '\n' : '') +
+    (j.paraOriginal ? '\n[TESTE] Na produção iria para: ' + j.paraOriginal.join(', ') + '\n' : '') +
+    '\nE-mail automático do app Central de Frota · ICC Brazil. Para sair da lista, peça ao administrador (aba ' + ABA_EMAILS_RELATORIOS + ').';
+  MailApp.sendEmail({
+    to: j.para.join(','), subject: (j.paraOriginal ? '[TESTE] ' : '') + assunto, body: corpo,
+    attachments: [Utilities.newBlob(Utilities.base64Decode(res.base64), 'application/pdf', res.filename)]
+  });
+  logEmail_('', 'Relatório ' + freq + ' · ' + nomeRel, j.para.join(','), 'ENVIADO', ondeTxt + ' · ' + j.rotulo);
+}
+
+// Rode UMA VEZ pelo editor: cria a aba (se faltar) e liga os dois envios.
+// Rodar de novo só recria os agendamentos (não duplica).
+function instalarEnviosRelatorios() {
+  abaEmailsRelatorios_();
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    const h = t.getHandlerFunction();
+    if (h === 'enviarRelatoriosSemanais' || h === 'enviarRelatoriosMensais') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('enviarRelatoriosSemanais').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(7).inTimezone(fusoHorario_()).create();
+  ScriptApp.newTrigger('enviarRelatoriosMensais').timeBased().onMonthDay(1).atHour(7).inTimezone(fusoHorario_()).create();
+  return 'Pronto: semanal toda segunda ~07h e mensal todo dia 1 ~07h. Preencha a aba ' + ABA_EMAILS_RELATORIOS + '.';
+}
+
+function removerEnviosRelatorios() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    const h = t.getHandlerFunction();
+    if (h === 'enviarRelatoriosSemanais' || h === 'enviarRelatoriosMensais' || h === 'continuarEnvioRelatorios') ScriptApp.deleteTrigger(t);
+  });
+  return 'Envios semanal e mensal desligados.';
+}
+
+// TESTE: gera todos os PDFs do semanal como se fosse hoje segunda, mas
+// manda tudo só para VOCÊ (quem está rodando o editor). Ninguém da lista recebe.
+function testarRelatorioSemanal() { return iniciarEnvioRelatorios_('SEMANAL', Session.getEffectiveUser().getEmail()); }
+function testarRelatorioMensal() { return iniciarEnvioRelatorios_('MENSAL', Session.getEffectiveUser().getEmail()); }
+
 // ======================= [OUT/2026] RESUMO DIÁRIO DE CHECKLISTS PENDENTES =======================
 // Manda, por unidade, um e-mail para a lista de CONFIG_EMAILS_MANUTENCAO
 // com os equipamentos "Em uso" que ainda não fizeram o checklist do dia.
@@ -6150,4 +7065,35 @@ function removerResumoDiarioChecklists() {
     if (t.getHandlerFunction() === 'enviarResumoChecklistsPendentes') ScriptApp.deleteTrigger(t);
   });
   return 'Resumo diário desligado.';
+}
+
+// ======================= PERMISSÃO DE TROCA DE GÁS (NOV/2026) =======================
+// Coluna PERMISSAO_GAS na aba CONFIG_USUARIOS (pode ficar em qualquer posição).
+// NAO = o operador não vê o ícone "Gás / Bateria" e o servidor recusa
+// troca de gás vinda dele. SIM ou em branco = pode (padrão).
+// Aceita "não", "Nao", "NÃO", "N"... e também cabeçalho com acento
+// ("PERMISSÃO_GAS") ou com espaço ("Permissão troca de gás").
+function permissaoGas_(usuario) {
+  const semAcento = function (t) {
+    return String(t === undefined || t === null ? '' : t)
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+  };
+  const chave = Object.keys(usuario || {}).find(function (k) {
+    const n = semAcento(k).replace(/[^A-Z]/g, '');
+    return n.indexOf('PERMISSAO') > -1 && n.indexOf('GAS') > -1;
+  });
+  if (!chave) return 'SIM';
+  const v = semAcento(usuario[chave]);
+  return (v === 'NAO' || v === 'N') ? 'NAO' : 'SIM';
+}
+
+// Barra a troca de gás de quem está com NAO. Administrador não é barrado.
+function exigirPermissaoGas_(idUsuario) {
+  if (!idUsuario) return;
+  const usuario = getUsuariosCache_().find(function (u) { return String(u.ID_USUARIO) === String(idUsuario); });
+  if (!usuario) return;
+  if (String(usuario.TIPO || 'OPERADOR').toUpperCase() === 'ADMIN') return;
+  if (permissaoGas_(usuario) === 'NAO') {
+    throw new Error('Este usuário não tem permissão para registrar troca de gás. Fale com o administrador.');
+  }
 }
