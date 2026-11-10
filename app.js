@@ -4941,7 +4941,8 @@ async function renderNaoConformidades() {
           btn.disabled = false; btn.textContent = aberta ? '✓ Marcar como fechada' : '↩ Reabrir';
         }
       };
-      card.appendChild(btn);
+      // [10/11] Não conformidade fechada não mostra mais o botão "Reabrir".
+      if (aberta) card.appendChild(btn);
       if (soNaMaquina && manutAtiva) {
         const btnLigar = el('<button class="btn btn--accent btn--block">🔗 Ligar ao chamado ' + escapeHtml(nc.ID_MANUTENCAO) + '</button>');
         btnLigar.onclick = async function () {

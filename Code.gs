@@ -660,7 +660,89 @@ function appendRow_(sheetName, rowObj) {
   const sh = sheet_(sheetName);
   const headers = HEADERS[sheetName];
   const row = headers.map(function (h) { return rowObj[h] !== undefined && rowObj[h] !== null ? rowObj[h] : ''; });
+  colocarSetorNaLinha_(sheetName, rowObj, row);
   sh.appendRow(row);
+}
+
+// ======================= [10/11] COLUNA SETOR NOS REGISTROS =======================
+// CHECKLISTS, TROCAS_GAS e MANUTENCOES ganham uma coluna SETOR (FABRICA ou
+// OPERACAO) no FIM da aba, gravada pelo NOME da coluna — as abas já têm
+// colunas extras depois das do HEADERS (as _DIGITADO do Horimetro.gs),
+// então a posição muda de aba para aba. O setor vem do login de quem
+// registra; sem setor no login (gerente/admin de TODOS), vale o setor da
+// máquina. Os filtros do app continuam pelo setor da máquina (nada muda na
+// tela); a coluna é para a planilha e o Looker Studio.
+const ABAS_COM_SETOR = ['CHECKLISTS', 'TROCAS_GAS', 'MANUTENCOES'];
+function setorDoRegistro_(idEquipamento) {
+  return normalizarSetor_(SETOR_PEDIDO_) || setorDoEquipamento_(idEquipamento);
+}
+// Posição (0 = coluna A) da coluna SETOR da aba, guardada 6 h no cache.
+function colunaSetorDaAba_(sheetName) {
+  const cache = CacheService.getScriptCache();
+  const chave = 'col_setor_' + sheetName;
+  const salvo = cache.get(chave);
+  if (salvo !== null) return Number(salvo);
+  const sh = sheet_(sheetName);
+  const cab = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0]
+    .map(function (h) { return String(h || '').trim(); });
+  const idx = cab.indexOf('SETOR');
+  cache.put(chave, String(idx), 21600);
+  return idx;
+}
+function colocarSetorNaLinha_(sheetName, rowObj, row) {
+  const nome = Object.keys(SHEETS).filter(function (k) { return SHEETS[k] === sheetName; })[0];
+  if (ABAS_COM_SETOR.indexOf(nome) === -1) return;
+  try {
+    const idx = colunaSetorDaAba_(sheetName);
+    if (idx < 0 || idx < row.length) return; // sem a coluna (ainda) ou posição estranha: não arrisca
+    while (row.length < idx) row.push('');
+    row.push(normalizarSetor_(rowObj.SETOR) || setorDoRegistro_(rowObj.ID_EQUIPAMENTO));
+  } catch (e) { console.error('colocarSetorNaLinha_: ' + e); }
+}
+// Cria a coluna SETOR (se faltar) no fim das 3 abas e preenche as linhas em
+// branco pelo setor da máquina. Roda sozinha uma vez; pode rodar à mão
+// (▶ Executar > configurarSetorRegistros) quantas vezes quiser: só mexe no
+// que está vazio.
+function configurarSetorRegistros() {
+  const mapa = mapaSetorEquipamentos_();
+  const res = [];
+  ABAS_COM_SETOR.forEach(function (nome) {
+    const aba = SHEETS[nome];
+    const sh = sheet_(aba);
+    const ultima = Math.max(sh.getLastColumn(), 1);
+    const cab = sh.getRange(1, 1, 1, ultima).getValues()[0].map(function (h) { return String(h || '').trim(); });
+    let col = cab.indexOf('SETOR') + 1;
+    if (!col) {
+      col = ultima + 1;
+      if (col > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), 1);
+      sh.getRange(1, col).setValue('SETOR').setFontWeight('bold');
+    }
+    const cId = cab.indexOf('ID_EQUIPAMENTO') + 1;
+    const linhas = sh.getLastRow() - 1;
+    let preenchidas = 0;
+    if (linhas > 0 && cId) {
+      const ids = sh.getRange(2, cId, linhas, 1).getValues();
+      const faixa = sh.getRange(2, col, linhas, 1);
+      const valores = faixa.getValues().map(function (v, i) {
+        if (normalizarSetor_(v[0])) return [normalizarSetor_(v[0])];
+        if (String(ids[i][0]) === '') return [v[0]];
+        preenchidas++;
+        return [mapa[String(ids[i][0])] || SETOR_PADRAO];
+      });
+      faixa.setValues(valores);
+    }
+    CacheService.getScriptCache().remove('col_setor_' + aba);
+    res.push(aba + ': coluna SETOR na ' + colunaParaLetra_(col) + ', ' + preenchidas + ' linha(s) preenchida(s)');
+  });
+  PropertiesService.getScriptProperties().setProperty('setor_registros_v1_ok', 'SIM');
+  MEMO_ABAS_ = {};
+  SpreadsheetApp.flush();
+  return res.join('\n');
+}
+function colunaParaLetra_(n) {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
 }
 
 // Grava várias linhas de uma vez (bem mais rápido que appendRow_ em loop —
@@ -1091,7 +1173,7 @@ function garantirEstrutura_() {
   let cache = null;
   try {
     cache = CacheService.getScriptCache();
-    if (cache.get('estrutura_ok_v12')) return;
+    if (cache.get('estrutura_ok_v13')) return;
   } catch (e) { /* sem cache: confere do jeito longo */ }
   try {
     if (PropertiesService.getScriptProperties().getProperty('horas_parada_v1_ok') !== 'SIM') {
@@ -1133,6 +1215,15 @@ function garantirEstrutura_() {
   garantirColunaAcionado_();
   garantirColunasHorimetro_();
   try {
+    if (PropertiesService.getScriptProperties().getProperty('setor_registros_v1_ok') !== 'SIM') {
+      const lock = LockService.getScriptLock();
+      esperarTrava_(lock);
+      try {
+        if (PropertiesService.getScriptProperties().getProperty('setor_registros_v1_ok') !== 'SIM') configurarSetorRegistros();
+      } finally { lock.releaseLock(); }
+    }
+  } catch (e) { console.error('configurarSetorRegistros: ' + e); }
+  try {
     if (PropertiesService.getScriptProperties().getProperty('usuarios_setor_v1_ok') !== 'SIM') configurarSetorUsuarios();
   } catch (e) { /* rode configurarSetorUsuarios() à mão se a coluna não aparecer */ }
   try {
@@ -1140,8 +1231,9 @@ function garantirEstrutura_() {
     if (props.getProperty('setor_v1_ok') === 'SIM' && props.getProperty('fluxo_v1_ok') === 'SIM' &&
         props.getProperty('usuarios_setor_v1_ok') === 'SIM' && props.getProperty('horimetro_v5_ok') === 'SIM' &&
         props.getProperty('horimetro_decimal_v1_ok') === 'SIM' && props.getProperty('horas_parada_v1_ok') === 'SIM' &&
-        props.getProperty('horas_rodadas_chk_v1_ok') === 'SIM' && props.getProperty('colunas_data_v1_ok') === 'SIM' && cache) {
-      cache.put('estrutura_ok_v12', '1', 21600);
+        props.getProperty('horas_rodadas_chk_v1_ok') === 'SIM' && props.getProperty('colunas_data_v1_ok') === 'SIM' &&
+        props.getProperty('setor_registros_v1_ok') === 'SIM' && cache) {
+      cache.put('estrutura_ok_v13', '1', 21600);
     }
   } catch (e) { /* tenta de novo no próximo pedido */ }
 }
